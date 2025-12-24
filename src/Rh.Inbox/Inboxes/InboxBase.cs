@@ -42,13 +42,13 @@ internal abstract class InboxBase : IInbox
         var collapseKey = message is IHasCollapseKey hasCollapseKey ? hasCollapseKey.GetCollapseKey() : null;
         var deduplicationId = message is IHasDeduplicationId hasDeduplicationId ? hasDeduplicationId.GetDeduplicationId() : null;
         var receivedAt = message is IHasReceivedAt hasReceivedAt ? hasReceivedAt.GetReceivedAt() : _dateTimeProvider.GetUtcNow();
-        var messageType = Configuration.MetadataRegistry.GetMessageType(typeof(TMessage));
+        var messageType = Configuration.MetadataRegistry.GetMessageType<TMessage>();
 
         return new InboxMessage
         {
             Id = id,
             MessageType = messageType,
-            Payload = Serializer.Serialize(message, typeof(TMessage)),
+            Payload = Serializer.Serialize(message),
             GroupId = groupId,
             CollapseKey = collapseKey,
             DeduplicationId = deduplicationId,

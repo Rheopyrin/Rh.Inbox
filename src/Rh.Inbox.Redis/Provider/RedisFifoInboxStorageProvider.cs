@@ -145,7 +145,7 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         return (int)results[0];
     }
 
-    private RedisValue[] BuildExtendGroupLocksArgv(string processorId, IReadOnlyList<string> groupIds)
+    private RedisValue[] BuildExtendGroupLocksArgv(string processorId, List<string> groupIds)
     {
         // ARGV: [lockKeyBase, processorId, lockTtlSeconds, ...groupIds]
         var lockTtlSeconds = (long)Configuration.Options.MaxProcessingTime.TotalSeconds;
@@ -166,7 +166,7 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         await db.ScriptEvaluateAsync(RedisScripts.ReleaseGroupLocks, Array.Empty<RedisKey>(), argv).ConfigureAwait(false);
     }
 
-    private RedisValue[] BuildReleaseArgv(IReadOnlyList<Guid> messageIds)
+    private RedisValue[] BuildReleaseArgv(List<Guid> messageIds)
     {
         // ARGV: [capturedKey, msgKeyBase, ...ids]
         var argv = new RedisValue[2 + messageIds.Count];

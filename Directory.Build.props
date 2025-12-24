@@ -1,5 +1,6 @@
 <Project>
     <PropertyGroup>
+        <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
         <Authors>Rheopyrin</Authors>
         <Company>Rheopyrin</Company>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
