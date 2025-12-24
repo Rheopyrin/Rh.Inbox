@@ -1,0 +1,14 @@
+<Project>
+    <PropertyGroup>
+        <Authors>Rheopyrin</Authors>
+        <Company>Rheopyrin</Company>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/Rheopyrin/Rh.Inbox</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/Rheopyrin/Rh.Inbox</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageIcon>icon.png</PackageIcon>
+        <VersionPrefix>0.8.0</VersionPrefix>
+    </PropertyGroup>
+</Project>
