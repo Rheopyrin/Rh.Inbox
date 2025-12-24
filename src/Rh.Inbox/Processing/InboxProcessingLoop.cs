@@ -301,7 +301,9 @@ internal sealed class InboxProcessingLoop : IDisposable
         try
         {
             if (token.IsCancellationRequested)
+            {
                 return;
+            }
 
             await ExtendLocksAsync(storageProvider, configuration, token);
         }
@@ -328,7 +330,9 @@ internal sealed class InboxProcessingLoop : IDisposable
         CancellationToken token)
     {
         if (token.IsCancellationRequested)
+        {
             return;
+        }
 
         IReadOnlyList<InboxMessage>? messagesToExtend;
 
@@ -343,7 +347,9 @@ internal sealed class InboxProcessingLoop : IDisposable
         }
 
         if (messagesToExtend is not { Count: > 0 })
+        {
             return;
+        }
 
         try
         {
@@ -383,11 +389,16 @@ internal sealed class InboxProcessingLoop : IDisposable
         CancellationToken token)
     {
         if (readDelay <= TimeSpan.Zero)
+        {
             return true;
+        }
 
         var elapsed = stopwatch.Elapsed;
+
         if (elapsed >= readDelay)
+        {
             return true;
+        }
 
         try
         {

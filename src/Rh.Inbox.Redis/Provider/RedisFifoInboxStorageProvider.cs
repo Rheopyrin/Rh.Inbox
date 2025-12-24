@@ -108,7 +108,9 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         CancellationToken token)
     {
         if (capturedMessages.Count == 0)
+        {
             return 0;
+        }
 
         var groupIds = capturedMessages
             .Where(m => !string.IsNullOrEmpty(m.GroupId))
@@ -155,7 +157,9 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         argv[2] = lockTtlSeconds;
 
         for (var i = 0; i < groupIds.Count; i++)
+        {
             argv[3 + i] = groupIds[i];
+        }
 
         return argv;
     }
@@ -174,7 +178,9 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         argv[1] = Keys.MsgKeyBase;
 
         for (var i = 0; i < messageIds.Count; i++)
+        {
             argv[2 + i] = messageIds[i].ToString();
+        }
 
         return argv;
     }
@@ -185,7 +191,9 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         argv[0] = Keys.LockKeyBase;
 
         for (var i = 0; i < groupIds.Count; i++)
+        {
             argv[1 + i] = groupIds[i];
+        }
 
         return argv;
     }

@@ -21,7 +21,9 @@ public class InMemoryCleanupIntegrationTests(ITestOutputHelper output) : IAsyncL
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     #region Cleanup Options Configuration Tests

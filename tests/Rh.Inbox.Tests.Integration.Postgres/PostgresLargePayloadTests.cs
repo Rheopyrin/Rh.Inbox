@@ -22,7 +22,9 @@ public class PostgresLargePayloadTests(PostgresContainerFixture container, ITest
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     [Theory]

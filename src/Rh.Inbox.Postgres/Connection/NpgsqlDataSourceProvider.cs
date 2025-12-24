@@ -30,7 +30,9 @@ internal sealed class NpgsqlDataSourceProvider : INpgsqlDataSourceProvider
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
+        {
             return;
+        }
 
         _disposed = true;
 
@@ -52,7 +54,9 @@ internal sealed class NpgsqlDataSourceProvider : INpgsqlDataSourceProvider
     public void Dispose()
     {
         if (_disposed)
+        {
             return;
+        }
 
         _disposed = true;
 

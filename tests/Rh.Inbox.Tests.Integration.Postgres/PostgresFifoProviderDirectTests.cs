@@ -287,7 +287,9 @@ public class PostgresFifoProviderDirectTests : IAsyncLifetime
         var messageIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
 
         foreach (var id in messageIds)
+        {
             await InsertTestMessageAsync(id, groupId: null, capturedAt: DateTime.UtcNow, capturedBy: "proc-1");
+        }
 
         await provider.ReleaseMessagesAndGroupLocksAsync(
             messageIds.Select(id => new MessageIdentifier(id, null)).ToArray(),

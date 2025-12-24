@@ -114,7 +114,9 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
             .ToArray();
 
         if (deduplicationIds.Length == 0)
+        {
             return messages;
+        }
 
         var existingIds = _inMemoryOptions.DeduplicationStore!.GetExisting(deduplicationIds, expirationTime);
         var newIds = deduplicationIds.Except(existingIds).ToHashSet();
@@ -198,10 +200,14 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
         foreach (var message in candidates)
         {
             if (result.Count + capturedCollapseKeys.Count >= _configuration.Options.ReadBatchSize)
+            {
                 break;
+            }
 
             if (!CanCaptureMessage(message, isFifo, lockedGroups, groupsBeingCaptured))
+            {
                 continue;
+            }
 
             MarkMessageAsCaptured(message, processorId, now);
             LockGroup(message.GroupId, now);
@@ -549,7 +555,9 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
         CancellationToken token)
     {
         if (capturedMessages.Count == 0)
+        {
             return 0;
+        }
 
         await _lock.WaitAsync(token);
         try

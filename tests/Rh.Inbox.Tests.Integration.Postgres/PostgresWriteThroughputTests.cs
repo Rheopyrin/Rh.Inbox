@@ -22,7 +22,9 @@ public class PostgresWriteThroughputTests(PostgresContainerFixture container, IT
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     [Fact]

@@ -22,7 +22,9 @@ public class RedisLargePayloadTests(RedisContainerFixture container, ITestOutput
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     [Theory]

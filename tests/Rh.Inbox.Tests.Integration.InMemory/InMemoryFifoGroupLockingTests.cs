@@ -29,7 +29,9 @@ public class InMemoryFifoGroupLockingTests(ITestOutputHelper output) : IAsyncLif
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     /// <summary>

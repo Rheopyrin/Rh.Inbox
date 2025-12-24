@@ -23,7 +23,9 @@ public class PostgresDeadLetterTests(PostgresContainerFixture container, ITestOu
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -239,7 +241,9 @@ public class PostgresDeadLetterTests(PostgresContainerFixture container, ITestOu
         {
             count = await GetDeadLetterCountAsync(inboxName);
             if (count >= expectedCount)
+            {
                 return count;
+            }
             await Task.Delay(100);
         }
 

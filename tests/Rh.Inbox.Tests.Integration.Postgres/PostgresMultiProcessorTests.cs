@@ -23,7 +23,9 @@ public class PostgresMultiProcessorTests(PostgresContainerFixture container, ITe
     public async Task DisposeAsync()
     {
         foreach (var sp in _serviceProviders)
+        {
             await sp.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -58,7 +60,9 @@ public class PostgresMultiProcessorTests(PostgresContainerFixture container, ITe
 
         output.WriteLine($"Processed {messageCount} messages in {elapsed.TotalMilliseconds:F0}ms ({messageCount / elapsed.TotalSeconds:F2} msg/s)");
         foreach (var h in handlers)
+        {
             output.WriteLine($"  {h.ProcessorId}: {h.ProcessedCount} ({100.0 * h.ProcessedCount / messageCount:F1}%)");
+        }
     }
 
     [Fact]

@@ -98,7 +98,9 @@ internal sealed class BatchedInboxProcessingStrategy : InboxProcessingStrategyBa
         }
 
         if (envelopes.Count == 0)
+        {
             return;
+        }
 
         try
         {

@@ -51,7 +51,9 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
         CancellationToken token)
     {
         if (capturedMessages.Count == 0)
+        {
             return 0;
+        }
 
         await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
         await using var cmd = new NpgsqlCommand(Sql.ExtendMessageLocks, connection);
@@ -122,7 +124,9 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
         var messageList = messages as InboxMessage[] ?? messages.ToArray();
 
         if (messageList.Length == 0)
+        {
             return;
+        }
 
         await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
         await using var transaction = await connection.BeginTransactionAsync(token);
@@ -161,7 +165,9 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
             .ToArray();
 
         if (deduplicationIds.Length == 0)
+        {
             return batch;
+        }
 
         var insertedIds = await InsertDeduplicationRecordsAsync(connection, transaction, deduplicationIds, token);
 
@@ -241,7 +247,9 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
             .ToArray();
 
         if (collapseKeys.Length == 0)
+        {
             return;
+        }
 
         await using var cmd = new NpgsqlCommand(Sql.DeleteCollapsed, connection, transaction);
         cmd.Parameters.AddWithValue("inboxName", Configuration.InboxName);
@@ -402,7 +410,9 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
     public async Task<IReadOnlyList<DeadLetterMessage>> ReadDeadLettersAsync(int count, CancellationToken token)
     {
         if (!Configuration.Options.EnableDeadLetter)
+        {
             return [];
+        }
 
         await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
         await using var cmd = new NpgsqlCommand(Sql.ReadDeadLetters, connection);

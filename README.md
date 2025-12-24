@@ -17,6 +17,7 @@ A high-performance, flexible message inbox library for .NET applications. Rh.Inb
   - [PostgreSQL](#postgresql)
   - [Redis](#redis)
   - [InMemory](#inmemory)
+  - [Implementing Custom Storage Provider](#implementing-custom-storage-provider)
 - [Configuration](#configuration)
   - [Common Options](#common-options)
   - [Provider-Specific Options](#provider-specific-options)
@@ -280,6 +281,16 @@ Each cleanup task (`DeadLetterCleanup`, `DeduplicationCleanup`, `GroupLocksClean
 | `Interval` | Time between cleanup cycles | 5 minutes |
 | `RestartDelay` | Delay before restart after failure | 30 seconds |
 
+**Cleanup Task Activation:**
+
+Cleanup tasks are only activated when the corresponding feature is enabled:
+
+| Cleanup Task | Activation Condition |
+|--------------|---------------------|
+| `DeadLetterCleanup` | `EnableDeadLetter = true` AND `DeadLetterMaxMessageLifetime > 0` |
+| `DeduplicationCleanup` | `EnableDeduplication = true` AND `DeduplicationInterval > 0` |
+| `GroupLocksCleanup` | Inbox type is `Fifo` or `FifoBatched` |
+
 **Manual Cleanup Task Management:**
 
 When `AutostartCleanupTasks = false`, cleanup tasks must be managed manually via `IPostgresCleanupTasksManager`. This is useful when running cleanup tasks on a separate host, pod, or as a cronjob:
@@ -413,7 +424,214 @@ Each cleanup task has the following options:
 | `Interval` | Time between cleanup cycles | 5 minutes |
 | `RestartDelay` | Delay before restart after failure | 30 seconds |
 
-Note: Unlike PostgreSQL, InMemory cleanup tasks always start automatically with the inbox lifecycle and cannot be disabled.
+Note: InMemory cleanup tasks do not have `BatchSize` option (cleanup is performed in a single operation).
+
+**Cleanup Task Activation:**
+
+Cleanup tasks are only activated when the corresponding feature is enabled:
+
+| Cleanup Task | Activation Condition |
+|--------------|---------------------|
+| `DeadLetterCleanup` | `EnableDeadLetter = true` AND `DeadLetterMaxMessageLifetime > 0` |
+| `DeduplicationCleanup` | `EnableDeduplication = true` AND `DeduplicationInterval > 0` |
+
+Note: Unlike PostgreSQL, InMemory does not have `GroupLocksCleanup` (group locks are managed in memory) and cleanup tasks always start automatically with the inbox lifecycle (no `AutostartCleanupTasks` option).
+
+### Implementing Custom Storage Provider
+
+You can implement your own storage provider (e.g., SQL Server, MongoDB, DynamoDB) by implementing the required interfaces.
+
+#### Step 1: Implement IInboxStorageProvider
+
+```csharp
+public class MyCustomStorageProvider : IInboxStorageProvider
+{
+    private readonly IInboxConfiguration _configuration;
+
+    public MyCustomStorageProvider(IInboxConfiguration configuration)
+    {
+        _configuration = configuration;
+    }
+
+    public Task WriteAsync(InboxMessage message, CancellationToken token = default)
+    {
+        // Write message to your storage
+        // Handle collapse keys: delete uncaptured messages with same collapse key
+    }
+
+    public Task WriteBatchAsync(IEnumerable<InboxMessage> messages, CancellationToken token = default)
+    {
+        // Write multiple messages in a batch
+    }
+
+    public Task<IReadOnlyList<InboxMessage>> ReadAndCaptureAsync(string processorId, CancellationToken token = default)
+    {
+        // Read available messages (captured_at IS NULL or expired)
+        // Mark them as captured (set captured_at, captured_by)
+        // Return up to ReadBatchSize messages
+        // Use _configuration.Options.MaxProcessingTime to determine lock expiration
+    }
+
+    public Task FailAsync(Guid messageId, CancellationToken token = default)
+    {
+        // Increment attempts_count and release (clear captured_at)
+    }
+
+    public Task FailBatchAsync(IReadOnlyList<Guid> messageIds, CancellationToken token = default)
+    {
+        // Batch version of FailAsync
+    }
+
+    public Task MoveToDeadLetterAsync(Guid messageId, string reason, CancellationToken token = default)
+    {
+        // Move message to dead letter storage with failure reason
+    }
+
+    public Task MoveToDeadLetterBatchAsync(IReadOnlyList<(Guid MessageId, string Reason)> messages, CancellationToken token = default)
+    {
+        // Batch version of MoveToDeadLetterAsync
+    }
+
+    public Task ReleaseBatchAsync(IReadOnlyList<Guid> messageIds, CancellationToken token = default)
+    {
+        // Release captured messages (clear captured_at) without failing
+    }
+
+    public Task<IReadOnlyList<DeadLetterMessage>> ReadDeadLettersAsync(int count, CancellationToken token = default)
+    {
+        // Read messages from dead letter storage
+    }
+
+    public Task ProcessResultsBatchAsync(
+        IReadOnlyList<Guid> toComplete,
+        IReadOnlyList<Guid> toFail,
+        IReadOnlyList<Guid> toRelease,
+        IReadOnlyList<(Guid MessageId, string Reason)> toDeadLetter,
+        CancellationToken token = default)
+    {
+        // Process all results in a single operation for efficiency
+        // Delete completed, fail/release others, move to DLQ
+    }
+
+    public Task<int> ExtendLocksAsync(
+        string processorId,
+        IReadOnlyList<IInboxMessageIdentifiers> capturedMessages,
+        DateTime newCapturedAt,
+        CancellationToken token = default)
+    {
+        // Extend lock time for captured messages (update captured_at)
+        // Return count of successfully extended locks
+    }
+}
+```
+
+#### Step 2: Implement IInboxStorageProviderFactory
+
+```csharp
+public class MyCustomStorageProviderFactory : IInboxStorageProviderFactory
+{
+    public IInboxStorageProvider Create(IInboxConfiguration options)
+    {
+        return new MyCustomStorageProvider(options);
+    }
+}
+```
+
+#### Step 3: (Optional) Implement ISupportMigration
+
+If your storage requires schema setup (tables, indexes), implement `ISupportMigration`:
+
+```csharp
+public class MyCustomStorageProvider : IInboxStorageProvider, ISupportMigration
+{
+    // ... IInboxStorageProvider methods ...
+
+    public Task MigrateAsync(CancellationToken token = default)
+    {
+        // Create tables, indexes, etc.
+        // This method should be idempotent (safe to run multiple times)
+    }
+}
+```
+
+#### Step 4: (Optional) Implement ISupportGroupLocksReleaseStorageProvider
+
+For FIFO inbox support, implement group lock management:
+
+```csharp
+public class MyCustomFifoStorageProvider : IInboxStorageProvider, ISupportGroupLocksReleaseStorageProvider
+{
+    // ... IInboxStorageProvider methods ...
+
+    public Task ReleaseGroupLocksAsync(IReadOnlyList<string> groupIds, CancellationToken token = default)
+    {
+        // Release locks for groups after all messages are processed
+        // This allows other workers to process new messages from these groups
+    }
+
+    public Task ReleaseMessagesAndGroupLocksAsync(IReadOnlyList<IInboxMessageIdentifiers> messages, CancellationToken token = default)
+    {
+        // Release messages AND their group locks in one operation
+        // Used during graceful shutdown
+    }
+}
+```
+
+#### Step 5: Create Extension Methods
+
+Create extension methods to integrate with the inbox builder:
+
+```csharp
+public static class MyCustomInboxBuilderExtensions
+{
+    public static TBuilder UseMyCustomStorage<TBuilder>(
+        this TBuilder builder,
+        Action<MyCustomOptions>? configureOptions = null)
+        where TBuilder : IInboxBuilderBase<TBuilder>
+    {
+        var options = new MyCustomOptions();
+        configureOptions?.Invoke(options);
+
+        builder.ConfigureServices(services =>
+        {
+            services.TryAddKeyedSingleton(builder.InboxName, options);
+            services.TryAddSingleton<MyCustomStorageProviderFactory>();
+        });
+
+        builder.UseStorageProviderFactory<MyCustomStorageProviderFactory>();
+
+        return builder;
+    }
+}
+```
+
+#### Step 6: Use Your Custom Provider
+
+```csharp
+services.AddInbox("my-inbox", builder =>
+{
+    builder.AsDefault()
+        .UseMyCustomStorage(options =>
+        {
+            options.ConnectionString = "...";
+        })
+        .RegisterHandler<MyHandler, MyMessage>();
+});
+```
+
+#### Key Implementation Notes
+
+1. **Message Locking**: Use `captured_at` and `captured_by` fields to implement optimistic locking. Messages with `captured_at IS NULL` or `captured_at < now - MaxProcessingTime` are available for processing.
+
+2. **FIFO Ordering**: For FIFO support, ensure only one worker can process messages from a group at a time. Use group locks with TTL based on `MaxProcessingTime`.
+
+3. **Deduplication**: Check `deduplication_id` against recent records within `DeduplicationInterval`. Reject duplicates during write.
+
+4. **Collapsing**: When writing a message with a `collapse_key`, delete any uncaptured messages with the same key.
+
+5. **Atomicity**: Use transactions where possible to ensure consistency, especially for `ProcessResultsBatchAsync`.
+
+6. **Idempotency**: Migration should be idempotent. Use `IF NOT EXISTS` patterns for table/index creation.
 
 ## Configuration
 

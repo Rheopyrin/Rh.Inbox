@@ -62,7 +62,9 @@ internal sealed class RedisConnectionProvider : IRedisConnectionProvider
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
+        {
             return;
+        }
 
         _disposed = true;
 
@@ -92,7 +94,9 @@ internal sealed class RedisConnectionProvider : IRedisConnectionProvider
     public void Dispose()
     {
         if (_disposed)
+        {
             return;
+        }
 
         _disposed = true;
 

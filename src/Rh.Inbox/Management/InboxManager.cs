@@ -172,7 +172,9 @@ internal sealed class InboxManager : IInboxManager, IInboxManagerInternal, IAsyn
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
+        {
             return;
+        }
 
         // Stop gracefully if still running
         if (_lifecycle.IsRunning)

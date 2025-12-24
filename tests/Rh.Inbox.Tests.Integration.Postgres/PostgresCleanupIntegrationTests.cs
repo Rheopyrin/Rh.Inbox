@@ -24,7 +24,9 @@ public class PostgresCleanupIntegrationTests(PostgresContainerFixture container,
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     #region Cleanup Options Configuration Tests
@@ -727,7 +729,9 @@ public class PostgresCleanupIntegrationTests(PostgresContainerFixture container,
         {
             count = await GetDeadLetterCountAsync(inboxName);
             if (count >= expectedCount)
+            {
                 return count;
+            }
             await Task.Delay(100);
         }
 

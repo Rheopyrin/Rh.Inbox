@@ -22,7 +22,9 @@ public class RedisWriteThroughputTests(RedisContainerFixture container, ITestOut
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     [Fact]

@@ -87,7 +87,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         var messageList = messages as IList<InboxMessage> ?? messages.ToList();
 
         if (messageList.Count == 0)
+        {
             return;
+        }
 
         var db = await GetDatabaseAsync(token).ConfigureAwait(false);
 
@@ -97,9 +99,13 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         foreach (var message in messageList)
         {
             if (string.IsNullOrEmpty(message.CollapseKey))
+            {
                 simpleMessages.Add(message);
+            }
             else
+            {
                 collapseMessages.Add(message);
+            }
         }
 
         if (simpleMessages.Count > 0)
@@ -314,13 +320,17 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
     public async Task<IReadOnlyList<DeadLetterMessage>> ReadDeadLettersAsync(int count, CancellationToken token)
     {
         if (!Configuration.Options.EnableDeadLetter)
+        {
             return [];
+        }
 
         var db = await GetDatabaseAsync(token).ConfigureAwait(false);
         var ids = await db.SortedSetRangeByRankAsync(Keys.DeadLetterKey, 0, count - 1).ConfigureAwait(false);
 
         if (ids.Length == 0)
+        {
             return [];
+        }
 
         var batch = db.CreateBatch();
         var hashTasks = ids
@@ -334,11 +344,16 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         foreach (var hash in results)
         {
             if (hash.Length == 0)
+            {
                 continue;
+            }
 
             var message = ParseDeadLetterHashData(hash);
+
             if (message != null)
+            {
                 messages.Add(message);
+            }
         }
 
         return messages;
@@ -356,7 +371,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         CancellationToken token)
     {
         if (capturedMessages.Count == 0)
+        {
             return 0;
+        }
 
         var db = await GetDatabaseAsync(token).ConfigureAwait(false);
         var argv = BuildExtendMessageLocksArgv(processorId, capturedMessages, newCapturedAt);
@@ -378,7 +395,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         argv[4] = ToUnixMilliseconds(newCapturedAt);
 
         for (var i = 0; i < capturedMessages.Count; i++)
+        {
             argv[5 + i] = capturedMessages[i].Id.ToString();
+        }
 
         return argv;
     }
@@ -393,7 +412,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         argv[3] = Keys.MsgKeyBase;
 
         for (var i = 0; i < messageIds.Count; i++)
+        {
             argv[4 + i] = messageIds[i].ToString();
+        }
 
         return argv;
     }
@@ -407,7 +428,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         argv[2] = TtlSeconds;
 
         for (var i = 0; i < messageIds.Count; i++)
+        {
             argv[3 + i] = messageIds[i].ToString();
+        }
 
         return argv;
     }
@@ -420,7 +443,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         argv[1] = Keys.MsgKeyBase;
 
         for (var i = 0; i < messageIds.Count; i++)
+        {
             argv[2 + i] = messageIds[i].ToString();
+        }
 
         return argv;
     }
@@ -530,23 +555,34 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
     protected static List<InboxMessage> ParseReadResult(RedisResult result)
     {
         var array = (RedisResult[]?)result;
+
         if (array == null || array.Length == 0)
+        {
             return [];
+        }
 
         var messages = new List<InboxMessage>(array.Length / 2);
 
         for (var i = 0; i < array.Length; i += 2)
         {
             if (i + 1 >= array.Length)
+            {
                 break;
+            }
 
             var hashData = (RedisResult[]?)array[i + 1];
+
             if (hashData == null || hashData.Length == 0)
+            {
                 continue;
+            }
 
             var message = ParseHashData(hashData);
+
             if (message != null)
+            {
                 messages.Add(message);
+            }
         }
 
         return messages;
@@ -559,7 +595,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         if (!reader.TryGetGuid("id", out var id) ||
             !reader.TryGetString("message_type", out var messageType) ||
             !reader.TryGetString("payload", out var payload))
+        {
             return null;
+        }
 
         return new InboxMessage
         {
@@ -582,7 +620,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
     public ValueTask DisposeAsync()
     {
         if (_disposed)
+        {
             return ValueTask.CompletedTask;
+        }
 
         _disposed = true;
         GC.SuppressFinalize(this);
@@ -592,7 +632,9 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
     public void Dispose()
     {
         if (_disposed)
+        {
             return;
+        }
 
         _disposed = true;
         GC.SuppressFinalize(this);

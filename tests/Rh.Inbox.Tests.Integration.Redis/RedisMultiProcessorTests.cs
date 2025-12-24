@@ -22,7 +22,9 @@ public class RedisMultiProcessorTests(RedisContainerFixture container, ITestOutp
     public async Task DisposeAsync()
     {
         foreach (var sp in _serviceProviders)
+        {
             await sp.DisposeAsync();
+        }
     }
 
     [Fact]
@@ -56,7 +58,9 @@ public class RedisMultiProcessorTests(RedisContainerFixture container, ITestOutp
 
         output.WriteLine($"Processed {messageCount} messages in {elapsed.TotalMilliseconds:F0}ms ({messageCount / elapsed.TotalSeconds:F2} msg/s)");
         foreach (var h in handlers)
+        {
             output.WriteLine($"  {h.ProcessorId}: {h.ProcessedCount} ({100.0 * h.ProcessedCount / messageCount:F1}%)");
+        }
     }
 
     private ServiceProvider CreateServiceProvider(string inboxName, MultiProcessorTrackingHandler<SimpleMessage> handler)

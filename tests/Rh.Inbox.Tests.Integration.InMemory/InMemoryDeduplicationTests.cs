@@ -20,7 +20,9 @@ public class InMemoryDeduplicationTests(ITestOutputHelper output) : IAsyncLifeti
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     [Fact]

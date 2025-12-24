@@ -24,7 +24,9 @@ public class RedisFifoBatchedTests(RedisContainerFixture container, ITestOutputH
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     [Fact]

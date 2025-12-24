@@ -39,7 +39,9 @@ internal sealed class InboxWriter : IInboxWriter
             .ToList();
 
         if (inboxMessages.Count == 0)
+        {
             return;
+        }
 
         CollapseMessages(inboxMessages);
         token.ThrowIfCancellationRequested();

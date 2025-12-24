@@ -299,7 +299,9 @@ public class RedisFifoProviderDirectTests : IAsyncLifetime
         var messageIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
 
         foreach (var id in messageIds)
+        {
             await InsertTestMessageAsync(id, groupId: null, capturedAt: DateTime.UtcNow, capturedBy: "proc-1");
+        }
 
         await provider.ReleaseMessagesAndGroupLocksAsync(
             messageIds.Select(id => new MessageIdentifier(id, null)).ToArray(),
@@ -554,7 +556,9 @@ public class RedisFifoProviderDirectTests : IAsyncLifetime
         var hash = await _db.HashGetAllAsync(messageKey);
 
         if (hash.Length == 0)
+        {
             return null;
+        }
 
         var hashDict = hash.ToDictionary(h => h.Name.ToString(), h => h.Value.ToString());
 

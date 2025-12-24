@@ -31,7 +31,9 @@ public class PostgresFifoGroupLockingTests(PostgresContainerFixture container, I
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     /// <summary>

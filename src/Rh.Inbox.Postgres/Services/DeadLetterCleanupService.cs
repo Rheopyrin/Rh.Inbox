@@ -161,12 +161,16 @@ internal sealed class DeadLetterCleanupService : ICleanupTask
             var batchDeleted = await cmd.ExecuteNonQueryAsync(token);
 
             if (batchDeleted == 0)
+            {
                 break;
+            }
 
             totalDeleted += batchDeleted;
 
             if (batchDeleted < batchSize)
+            {
                 break;
+            }
         }
 
         if (totalDeleted > 0)

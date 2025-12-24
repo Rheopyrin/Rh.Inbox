@@ -187,9 +187,13 @@ internal abstract class InboxProcessingStrategyBase : IInboxProcessingStrategy
         }
 
         if (toFail.Count > 0)
+        {
             await storageProvider.FailBatchAsync(toFail, token);
+        }
 
         if (toDeadLetter.Count > 0)
+        {
             await storageProvider.MoveToDeadLetterBatchAsync(toDeadLetter, token);
+        }
     }
 }

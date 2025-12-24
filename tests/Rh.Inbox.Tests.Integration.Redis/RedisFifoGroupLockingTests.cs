@@ -31,7 +31,9 @@ public class RedisFifoGroupLockingTests(RedisContainerFixture container, ITestOu
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     /// <summary>

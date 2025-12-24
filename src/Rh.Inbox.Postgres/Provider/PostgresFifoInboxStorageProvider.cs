@@ -112,7 +112,9 @@ internal sealed class PostgresFifoInboxStorageProvider : PostgresInboxStoragePro
         CancellationToken token)
     {
         if (capturedMessages.Count == 0)
+        {
             return 0;
+        }
 
         var messageIds = capturedMessages.Select(m => m.Id).ToList();
         var groupIds = capturedMessages

@@ -86,7 +86,9 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
     private static IEnumerable<List<InboxMessage>> BatchConsecutiveSameType(List<InboxMessage> messages)
     {
         if (messages.Count == 0)
+        {
             yield break;
+        }
 
         var batch = new List<InboxMessage> { messages[0] };
 
@@ -149,7 +151,9 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
         }
 
         if (envelopes.Count == 0)
+        {
             return;
+        }
 
         try
         {

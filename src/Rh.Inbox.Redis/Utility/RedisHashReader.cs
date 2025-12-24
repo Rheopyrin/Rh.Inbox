@@ -26,7 +26,9 @@ internal readonly struct RedisHashReader
             var value = (string?)hashData[i + 1];
 
             if (key is not null && value is not null)
+            {
                 fields[key] = value;
+            }
         }
 
         return new RedisHashReader(fields);

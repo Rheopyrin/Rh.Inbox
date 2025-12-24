@@ -22,7 +22,9 @@ public class PostgresDeduplicationTests(PostgresContainerFixture container, ITes
     public async Task DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     [Fact]

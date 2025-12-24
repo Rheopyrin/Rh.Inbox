@@ -113,7 +113,9 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
         var messageIds = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
 
         foreach (var id in messageIds)
+        {
             await InsertTestMessageAsync(id, capturedAt: originalCapturedAt, capturedBy: processorId);
+        }
 
         var result = await provider.ExtendLocksAsync(
             processorId,
@@ -188,8 +190,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync(enableDeadLetter: true);
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id);
+        }
 
         await provider.MoveToDeadLetterBatchAsync(
             ids.Select(id => (id, "Failed")).ToList(),
@@ -210,8 +215,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync(enableDeadLetter: false);
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id);
+        }
 
         await provider.MoveToDeadLetterBatchAsync(
             ids.Select(id => (id, "Failed")).ToList(),
@@ -247,8 +255,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync();
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id, capturedAt: DateTime.UtcNow, capturedBy: "proc-1");
+        }
 
         await provider.ReleaseBatchAsync(ids, CancellationToken.None);
 
@@ -333,11 +344,15 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
 
         // Insert 2 pending messages
         for (int i = 0; i < 2; i++)
+        {
             await InsertTestMessageAsync(Guid.NewGuid());
+        }
 
         // Insert 2 captured (in-flight) messages
         for (int i = 0; i < 2; i++)
+        {
             await InsertTestMessageAsync(Guid.NewGuid(), capturedAt: DateTime.UtcNow, capturedBy: "proc");
+        }
 
         // Insert 1 more and move to dead letter
         var dlqId = Guid.NewGuid();
@@ -545,8 +560,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync();
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id, capturedAt: DateTime.UtcNow, capturedBy: "proc-1", attemptsCount: 0);
+        }
 
         await provider.FailBatchAsync(ids, CancellationToken.None);
 
@@ -578,8 +596,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync();
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id);
+        }
 
         await provider.ProcessResultsBatchAsync(
             toComplete: ids,
@@ -600,8 +621,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync();
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id, capturedAt: DateTime.UtcNow, capturedBy: "proc", attemptsCount: 0);
+        }
 
         await provider.ProcessResultsBatchAsync(
             toComplete: [],
@@ -623,8 +647,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync();
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id, capturedAt: DateTime.UtcNow, capturedBy: "proc");
+        }
 
         await provider.ProcessResultsBatchAsync(
             toComplete: [],
@@ -646,8 +673,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync(enableDeadLetter: true);
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id);
+        }
 
         await provider.ProcessResultsBatchAsync(
             toComplete: [],
@@ -719,12 +749,16 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     {
         var provider = await CreateAndMigrateProviderAsync();
         var ids = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() };
+
         foreach (var id in ids)
+        {
             await InsertTestMessageAsync(id);
+        }
 
         var messages = await provider.ReadAndCaptureAsync("processor-1", CancellationToken.None);
 
         messages.Should().HaveCount(3);
+
         foreach (var id in ids)
         {
             var dbMessage = await GetMessageAsync(id);
@@ -792,8 +826,11 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
     public async Task ReadAndCaptureAsync_RespectsBatchSize()
     {
         var provider = await CreateAndMigrateProviderAsync(batchSize: 2);
+
         for (int i = 0; i < 5; i++)
+        {
             await InsertTestMessageAsync(Guid.NewGuid());
+        }
 
         var messages = await provider.ReadAndCaptureAsync("processor-1", CancellationToken.None);
 
@@ -947,7 +984,9 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
         var hash = await _database.HashGetAllAsync(messageKey);
 
         if (hash.Length == 0)
+        {
             return null;
+        }
 
         var hashDict = hash.ToDictionary(h => h.Name.ToString(), h => h.Value);
 
