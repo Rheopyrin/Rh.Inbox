@@ -11,6 +11,7 @@ using Rh.Inbox.Abstractions.Storage;
 using Rh.Inbox.Configuration;
 using Rh.Inbox.Health;
 using Rh.Inbox.Inboxes;
+using Rh.Inbox.Processing;
 using Rh.Inbox.Processing.Strategies.Implementation;
 using Rh.Inbox.Tests.Unit.TestHelpers;
 using Xunit;
@@ -224,6 +225,16 @@ public class ProcessingStrategyEdgeCasesTests
         return Substitute.For<IInboxStorageProvider>();
     }
 
+    private static IMessageProcessingContext CreateContext(
+        IInboxStorageProvider storageProvider,
+        IReadOnlyList<InboxMessage> messages,
+        int maxAttempts = 3)
+    {
+        var options = Substitute.For<IInboxOptions>();
+        options.MaxAttempts.Returns(maxAttempts);
+        return new MessageProcessingContext(storageProvider, options, Substitute.For<ILogger>(), messages);
+    }
+
     private static IServiceProvider CreateServiceProvider<THandler>(THandler handler)
         where THandler : class
     {
@@ -337,9 +348,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateEmptyServiceProvider();
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(UnknownMessageTypeName);
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterAsync(
@@ -357,9 +369,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateEmptyServiceProvider();
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(UnknownMessageTypeName, "group-1");
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterAsync(
@@ -377,9 +390,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateEmptyServiceProvider();
         var strategy = new BatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = new[] { CreateMessage(UnknownMessageTypeName), CreateMessage(UnknownMessageTypeName) };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterBatchAsync(
@@ -402,9 +416,10 @@ public class ProcessingStrategyEdgeCasesTests
             CreateMessage(UnknownMessageTypeName, "group-1"),
             CreateMessage(UnknownMessageTypeName, "group-1")
         };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterBatchAsync(
@@ -429,9 +444,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterAsync(
@@ -452,9 +468,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, "group-1");
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterAsync(
@@ -475,9 +492,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new BatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = new[] { CreateMessage(), CreateMessage() };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterBatchAsync(
@@ -501,9 +519,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateEmptyServiceProvider();
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterAsync(
@@ -521,9 +540,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateEmptyServiceProvider();
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, "group-1");
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterAsync(
@@ -541,9 +561,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateEmptyServiceProvider();
         var strategy = new BatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = new[] { CreateMessage(), CreateMessage() };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterBatchAsync(
@@ -567,9 +588,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).FailAsync(message.Id, Arg.Any<CancellationToken>());
@@ -585,9 +607,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, "group-1");
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).FailAsync(message.Id, Arg.Any<CancellationToken>());
@@ -603,9 +626,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new BatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = new[] { CreateMessage(), CreateMessage() };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).FailBatchAsync(
@@ -627,9 +651,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(attemptsCount: 2); // MaxAttempts is 3, so next attempt will exceed
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterAsync(
@@ -649,9 +674,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, "group-1", attemptsCount: 2);
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).MoveToDeadLetterAsync(
@@ -677,9 +703,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -702,9 +729,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(attemptsCount: 0);
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert - should fail (not move to dead letter)
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -717,9 +745,10 @@ public class ProcessingStrategyEdgeCasesTests
         // Arrange - now test max attempts exceeded
         storageProvider.ClearReceivedCalls();
         var message2 = CreateMessage(attemptsCount: 2);
+        var context2 = CreateContext(storageProvider, [message2]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message2], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message2], context2, CancellationToken.None);
 
         // Assert - should move to dead letter
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -744,9 +773,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -769,9 +799,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -791,9 +822,10 @@ public class ProcessingStrategyEdgeCasesTests
         var inbox = CreateMockInbox(InboxType.Default, MessageTypeName, typeof(TestMessage), storageProvider);
         var serviceProvider = CreateEmptyServiceProvider();
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var context = CreateContext(storageProvider, Array.Empty<InboxMessage>());
 
         // Act
-        await strategy.ProcessAsync("processor-1", Array.Empty<InboxMessage>(), CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", Array.Empty<InboxMessage>(), context, CancellationToken.None);
 
         // Assert
         await storageProvider.DidNotReceive().ProcessResultsBatchAsync(
@@ -821,9 +853,11 @@ public class ProcessingStrategyEdgeCasesTests
         var message1 = CreateMessage(attemptsCount: 0); // Will be failed
         var message2 = CreateMessage(attemptsCount: 1); // Will be failed
         var message3 = CreateMessage(attemptsCount: 2); // Will be moved to dead letter (exceeds max)
+        var messages = new[] { message1, message2, message3 };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", new[] { message1, message2, message3 }, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert
         await storageProvider.Received(1).FailBatchAsync(
@@ -848,9 +882,10 @@ public class ProcessingStrategyEdgeCasesTests
         var inbox = CreateMockInbox(InboxType.Batched, MessageTypeName, typeof(TestMessage), storageProvider);
         var serviceProvider = CreateEmptyServiceProvider();
         var strategy = new BatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var context = CreateContext(storageProvider, Array.Empty<InboxMessage>());
 
         // Act
-        await strategy.ProcessAsync("processor-1", Array.Empty<InboxMessage>(), CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", Array.Empty<InboxMessage>(), context, CancellationToken.None);
 
         // Assert
         await storageProvider.DidNotReceive().FailBatchAsync(
@@ -878,9 +913,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, "group-1");
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert
         await groupLocksProvider.Received(1).ReleaseGroupLocksAsync(
@@ -899,9 +935,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, "group-1");
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert - should still release the lock despite exception
         await groupLocksProvider.Received(1).ReleaseGroupLocksAsync(
@@ -920,9 +957,9 @@ public class ProcessingStrategyEdgeCasesTests
         handler.HandleAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<InboxMessageEnvelope<FifoTestMessage>>>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
-                var messages = call.Arg<IReadOnlyList<InboxMessageEnvelope<FifoTestMessage>>>();
+                var msgs = call.Arg<IReadOnlyList<InboxMessageEnvelope<FifoTestMessage>>>();
                 return Task.FromResult<IReadOnlyList<InboxMessageResult>>(
-                    messages.Select(m => new InboxMessageResult(m.Id, InboxHandleResult.Success)).ToList());
+                    msgs.Select(m => new InboxMessageResult(m.Id, InboxHandleResult.Success)).ToList());
             });
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoBatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
@@ -931,9 +968,10 @@ public class ProcessingStrategyEdgeCasesTests
             CreateMessage(FifoMessageTypeName, "group-1"),
             CreateMessage(FifoMessageTypeName, "group-1")
         };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert
         await groupLocksProvider.Received(1).ReleaseGroupLocksAsync(
@@ -956,9 +994,10 @@ public class ProcessingStrategyEdgeCasesTests
             CreateMessage(FifoMessageTypeName, "group-1"),
             CreateMessage(FifoMessageTypeName, "group-1")
         };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert - should still release the lock despite exception
         await groupLocksProvider.Received(1).ReleaseGroupLocksAsync(
@@ -979,9 +1018,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, groupId: ""); // Empty group ID
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert - should NOT release group lock for empty group ID
         await groupLocksProvider.DidNotReceive().ReleaseGroupLocksAsync(
@@ -1000,9 +1040,9 @@ public class ProcessingStrategyEdgeCasesTests
         handler.HandleAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<InboxMessageEnvelope<FifoTestMessage>>>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
-                var messages = call.Arg<IReadOnlyList<InboxMessageEnvelope<FifoTestMessage>>>();
+                var msgs = call.Arg<IReadOnlyList<InboxMessageEnvelope<FifoTestMessage>>>();
                 return Task.FromResult<IReadOnlyList<InboxMessageResult>>(
-                    messages.Select(m => new InboxMessageResult(m.Id, InboxHandleResult.Success)).ToList());
+                    msgs.Select(m => new InboxMessageResult(m.Id, InboxHandleResult.Success)).ToList());
             });
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoBatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
@@ -1012,9 +1052,10 @@ public class ProcessingStrategyEdgeCasesTests
             CreateMessage(FifoMessageTypeName, "group-2"),
             CreateMessage(FifoMessageTypeName, "group-3")
         };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert - each group should be released once
         await groupLocksProvider.Received(1).ReleaseGroupLocksAsync(
@@ -1047,9 +1088,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert - message should be failed via ProcessResultsBatchAsync (toFail list)
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -1075,9 +1117,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert - message should be completed normally (not failed)
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -1104,9 +1147,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, "group-1");
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert - message should be failed via ProcessResultsBatchAsync (toFail list)
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -1132,9 +1176,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new BatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = new[] { CreateMessage(), CreateMessage() };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert - all messages should be failed via ProcessResultsBatchAsync (toFail list)
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -1164,9 +1209,10 @@ public class ProcessingStrategyEdgeCasesTests
             CreateMessage(FifoMessageTypeName, "group-1"),
             CreateMessage(FifoMessageTypeName, "group-1")
         };
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", messages, context, CancellationToken.None);
 
         // Assert - all messages should be failed via ProcessResultsBatchAsync (toFail list)
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -1192,9 +1238,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(attemptsCount: 2); // MaxAttempts is 3, so this will exceed
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert - message should be moved to dead letter via ProcessResultsBatchAsync (toDeadLetter list)
         await storageProvider.Received(1).ProcessResultsBatchAsync(
@@ -1221,9 +1268,10 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var message = CreateMessage(FifoMessageTypeName, "group-1");
+        var context = CreateContext(storageProvider, [message]);
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+        await strategy.ProcessAsync("processor-1", [message], context, CancellationToken.None);
 
         // Assert - group lock should still be released even on timeout
         await groupLocksProvider.Received(1).ReleaseGroupLocksAsync(
@@ -1255,6 +1303,7 @@ public class ProcessingStrategyEdgeCasesTests
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, logger);
         var message = CreateMessage();
+        var context = CreateContext(storageProvider, [message]);
 
         using var cts = new CancellationTokenSource();
 
@@ -1266,7 +1315,7 @@ public class ProcessingStrategyEdgeCasesTests
         });
 
         // Act
-        await strategy.ProcessAsync("processor-1", [message], cts.Token);
+        await strategy.ProcessAsync("processor-1", [message], context, cts.Token);
 
         // Assert - message gets failed (caught by outer exception handler)
         // but NOT due to timeout, so timeout warning should NOT be logged

@@ -12,6 +12,7 @@ using Rh.Inbox.Abstractions.Storage;
 using Rh.Inbox.Configuration;
 using Rh.Inbox.Health;
 using Rh.Inbox.Inboxes;
+using Rh.Inbox.Processing;
 using Rh.Inbox.Processing.Strategies.Implementation;
 using Rh.Inbox.Tests.Unit.TestHelpers;
 using Xunit;
@@ -203,7 +204,22 @@ public class ParallelProcessingTests
 
     #region Test Setup Helpers
 
-    private static InboxBase CreateMockInbox(InboxType type, int maxProcessingThreads, string messageTypeName, Type messageClrType)
+    private static IInboxStorageProvider CreateMockStorageProvider()
+    {
+        return Substitute.For<IInboxStorageProvider>();
+    }
+
+    private static IMessageProcessingContext CreateContext(
+        IInboxStorageProvider storageProvider,
+        IReadOnlyList<InboxMessage> messages,
+        int maxAttempts = 3)
+    {
+        var options = Substitute.For<IInboxOptions>();
+        options.MaxAttempts.Returns(maxAttempts);
+        return new MessageProcessingContext(storageProvider, options, Substitute.For<ILogger>(), messages);
+    }
+
+    private static InboxBase CreateMockInbox(InboxType type, int maxProcessingThreads, string messageTypeName, Type messageClrType, IInboxStorageProvider? storageProvider = null)
     {
         var options = TestConfigurationFactory.CreateOptions(
             inboxName: InboxName,
@@ -224,7 +240,7 @@ public class ParallelProcessingTests
             DateTimeProvider = Substitute.For<IDateTimeProvider>()
         };
 
-        var storageProvider = Substitute.For<IInboxStorageProvider>();
+        storageProvider ??= Substitute.For<IInboxStorageProvider>();
         var serializer = CreateSerializer();
         var dateTimeProvider = Substitute.For<IDateTimeProvider>();
 
@@ -349,13 +365,15 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingHandler<TestMessage>(TimeSpan.FromMilliseconds(50));
-        var inbox = CreateMockInbox(InboxType.Default, 1, MessageTypeName, typeof(TestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.Default, 1, MessageTypeName, typeof(TestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateTestMessages(5);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().Be(1, "sequential processing should have max concurrency of 1");
@@ -367,13 +385,15 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingHandler<TestMessage>(TimeSpan.FromMilliseconds(100));
-        var inbox = CreateMockInbox(InboxType.Default, 4, MessageTypeName, typeof(TestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.Default, 4, MessageTypeName, typeof(TestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateTestMessages(8);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().BeGreaterThan(1, "parallel processing should have concurrency > 1");
@@ -387,13 +407,15 @@ public class ParallelProcessingTests
         // Arrange
         const int maxProcessingThreads = 2;
         var handler = new ConcurrencyTrackingHandler<TestMessage>(TimeSpan.FromMilliseconds(100));
-        var inbox = CreateMockInbox(InboxType.Default, maxProcessingThreads, MessageTypeName, typeof(TestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.Default, maxProcessingThreads, MessageTypeName, typeof(TestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateTestMessages(10);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().BeLessOrEqualTo(maxProcessingThreads);
@@ -409,13 +431,15 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingBatchedHandler<TestMessage>(TimeSpan.FromMilliseconds(50));
-        var inbox = CreateMockInbox(InboxType.Batched, 1, MessageTypeName, typeof(TestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.Batched, 1, MessageTypeName, typeof(TestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new BatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateTestMessages(5);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().Be(1);
@@ -427,7 +451,8 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingBatchedHandler<TestMessage>(TimeSpan.FromMilliseconds(100));
-        var inbox = CreateMockInbox(InboxType.Batched, 4, MessageTypeName, typeof(TestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.Batched, 4, MessageTypeName, typeof(TestMessage), storageProvider);
 
         // Register second message type
         var config = inbox.GetConfiguration();
@@ -448,9 +473,10 @@ public class ParallelProcessingTests
                 ReceivedAt = DateTime.UtcNow
             });
         }
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().BeGreaterThanOrEqualTo(1);
@@ -466,13 +492,15 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingFifoHandler<FifoTestMessage>(TimeSpan.FromMilliseconds(30));
-        var inbox = CreateMockInbox(InboxType.Fifo, 1, FifoMessageTypeName, typeof(FifoTestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.Fifo, 1, FifoMessageTypeName, typeof(FifoTestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateFifoTestMessages(groupCount: 3, messagesPerGroup: 2);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().Be(1, "sequential processing should have max concurrency of 1");
@@ -484,13 +512,15 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingFifoHandler<FifoTestMessage>(TimeSpan.FromMilliseconds(100));
-        var inbox = CreateMockInbox(InboxType.Fifo, 4, FifoMessageTypeName, typeof(FifoTestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.Fifo, 4, FifoMessageTypeName, typeof(FifoTestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateFifoTestMessages(groupCount: 4, messagesPerGroup: 2);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().BeGreaterThan(1, "different groups should process in parallel");
@@ -502,13 +532,15 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingFifoHandler<FifoTestMessage>(TimeSpan.FromMilliseconds(50));
-        var inbox = CreateMockInbox(InboxType.Fifo, 4, FifoMessageTypeName, typeof(FifoTestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.Fifo, 4, FifoMessageTypeName, typeof(FifoTestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateFifoTestMessages(groupCount: 2, messagesPerGroup: 5);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.ProcessedCount.Should().Be(10);
@@ -539,13 +571,15 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingFifoBatchedHandler<FifoTestMessage>(TimeSpan.FromMilliseconds(30));
-        var inbox = CreateMockInbox(InboxType.FifoBatched, 1, FifoMessageTypeName, typeof(FifoTestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.FifoBatched, 1, FifoMessageTypeName, typeof(FifoTestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoBatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateFifoTestMessages(groupCount: 3, messagesPerGroup: 2);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().Be(1, "sequential processing should have max concurrency of 1");
@@ -556,13 +590,15 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingFifoBatchedHandler<FifoTestMessage>(TimeSpan.FromMilliseconds(100));
-        var inbox = CreateMockInbox(InboxType.FifoBatched, 4, FifoMessageTypeName, typeof(FifoTestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.FifoBatched, 4, FifoMessageTypeName, typeof(FifoTestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoBatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
         var messages = CreateFifoTestMessages(groupCount: 4, messagesPerGroup: 3);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.MaxConcurrency.Should().BeGreaterThan(1, "different groups should process in parallel");
@@ -573,15 +609,17 @@ public class ParallelProcessingTests
     {
         // Arrange
         var handler = new ConcurrencyTrackingFifoBatchedHandler<FifoTestMessage>(TimeSpan.FromMilliseconds(50));
-        var inbox = CreateMockInbox(InboxType.FifoBatched, 2, FifoMessageTypeName, typeof(FifoTestMessage));
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(InboxType.FifoBatched, 2, FifoMessageTypeName, typeof(FifoTestMessage), storageProvider);
         var serviceProvider = CreateServiceProvider(handler);
         var strategy = new FifoBatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
 
         // All messages in same group, same type = one batch
         var messages = CreateFifoTestMessages(groupCount: 1, messagesPerGroup: 5);
+        var context = CreateContext(storageProvider, messages);
 
         // Act
-        await strategy.ProcessAsync(string.Empty, messages, CancellationToken.None);
+        await strategy.ProcessAsync(string.Empty, messages, context, CancellationToken.None);
 
         // Assert
         handler.BatchCount.Should().Be(1, "consecutive same-type messages should be batched together");

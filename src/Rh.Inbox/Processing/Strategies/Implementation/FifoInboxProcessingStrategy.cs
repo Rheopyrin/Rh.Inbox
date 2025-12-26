@@ -12,9 +12,9 @@ namespace Rh.Inbox.Processing.Strategies.Implementation;
 internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
 {
     private delegate Task ProcessMessageDelegate(
+        IMessageProcessingContext context,
         InboxMessage message,
         IInboxMessagePayloadSerializer serializer,
-        IInboxStorageProvider storageProvider,
         CancellationToken token);
 
     private readonly BoundedDelegateCache<ProcessMessageDelegate> _delegateCache;
@@ -28,7 +28,11 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
         _delegateCache = new BoundedDelegateCache<ProcessMessageDelegate>(this, nameof(ProcessMessageAsync));
     }
 
-    public override async Task ProcessAsync(string processorId, IReadOnlyList<InboxMessage> messages, CancellationToken token)
+    public override async Task ProcessAsync(
+        string processorId,
+        IReadOnlyList<InboxMessage> messages,
+        IMessageProcessingContext context,
+        CancellationToken token)
     {
         var configuration = GetConfiguration();
         var storageProvider = GetStorageProvider();
@@ -55,12 +59,12 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
                     if (messageType == null)
                     {
                         Logger.LogWarning("Unknown message type: {MessageType}", message.MessageType);
-                        await MoveToDeadLetterAsync(message, $"Unknown message type: {message.MessageType}", storageProvider, ct);
+                        await context.MoveToDeadLetterAsync(message, $"Unknown message type: {message.MessageType}", ct);
                         continue;
                     }
 
                     var processDelegate = _delegateCache.GetOrAdd(messageType);
-                    await processDelegate(message, serializer, storageProvider, ct);
+                    await processDelegate(context, message, serializer, ct);
                 }
             }
             finally
@@ -74,16 +78,15 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
     }
 
     private async Task ProcessMessageAsync<TMessage>(
+        IMessageProcessingContext context,
         InboxMessage message,
         IInboxMessagePayloadSerializer serializer,
-        IInboxStorageProvider storageProvider,
         CancellationToken token) where TMessage : class, IHasGroupId
     {
         var payload = serializer.Deserialize<TMessage>(message.Payload);
         if (payload == null)
         {
-            await storageProvider.MoveToDeadLetterAsync(
-                message.Id, "Failed to deserialize message payload", token);
+            await context.MoveToDeadLetterAsync(message, "Failed to deserialize message payload", token);
             return;
         }
 
@@ -93,8 +96,7 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
         if (handler == null)
         {
             Logger.LogWarning("No FIFO handler registered for message type: {MessageType}", typeof(TMessage).FullName);
-            await storageProvider.MoveToDeadLetterAsync(
-                message.Id, $"No FIFO handler registered for message type: {typeof(TMessage).FullName}", token);
+            await context.MoveToDeadLetterAsync(message, $"No FIFO handler registered for message type: {typeof(TMessage).FullName}", token);
             return;
         }
 
@@ -108,16 +110,15 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
                 $"FIFO message {message.Id}",
                 token);
 
-            // Use Failed result on timeout, letting ProcessResultsAsync handle max attempts logic
+            // Use Failed result on timeout, letting ProcessResultsBatchAsync handle max attempts logic
             var handlerResult = completed ? result : InboxHandleResult.Failed;
             var messageResult = new InboxMessageResult(message.Id, handlerResult);
-            var messagesById = new Dictionary<Guid, InboxMessage> { { message.Id, message } };
-            await ProcessResultsAsync([messageResult], messagesById, storageProvider, token);
+            await context.ProcessResultsBatchAsync([messageResult], token);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error executing FIFO handler for message {MessageId}", message.Id);
-            await FailMessageAsync(message, storageProvider, token);
+            await context.FailMessageAsync(message, token);
         }
     }
 }

@@ -18,8 +18,7 @@ internal sealed class InboxProcessingLoop : IDisposable
 
     private Task? _processingTask;
     private CancellationTokenSource? _cts;
-    private IReadOnlyList<InboxMessage>? _currentlyCapturedMessages;
-    private readonly SemaphoreSlim _inFlightSemaphore = new(1, 1);
+    private MessageProcessingContext? _currentContext;
 
     public InboxProcessingLoop(
         InboxBase inbox,
@@ -95,7 +94,6 @@ internal sealed class InboxProcessingLoop : IDisposable
     public void Dispose()
     {
         _cts?.Dispose();
-        _inFlightSemaphore.Dispose();
     }
 
     private async Task ProcessingLoopAsync(IInboxConfiguration configuration, CancellationToken token)
@@ -118,7 +116,7 @@ internal sealed class InboxProcessingLoop : IDisposable
                 var shouldDelay = true;
                 try
                 {
-                    var messagesProcessed = await ProcessBatchAsync(token);
+                    var messagesProcessed = await ProcessBatchAsync(configuration, token);
                     shouldDelay = messagesProcessed == 0;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -155,18 +153,7 @@ internal sealed class InboxProcessingLoop : IDisposable
 
     private async Task ReleaseInFlightMessagesAsync()
     {
-        IReadOnlyList<InboxMessage>? messagesToRelease;
-
-        await _inFlightSemaphore.WaitAsync();
-        try
-        {
-            messagesToRelease = _currentlyCapturedMessages;
-            _currentlyCapturedMessages = null;
-        }
-        finally
-        {
-            _inFlightSemaphore.Release();
-        }
+        var messagesToRelease = GetAndClearContext();
 
         if (messagesToRelease is not { Count: > 0 })
         {
@@ -217,10 +204,24 @@ internal sealed class InboxProcessingLoop : IDisposable
         }
     }
 
-    private async Task<int> ProcessBatchAsync(CancellationToken token)
+    private IReadOnlyList<InboxMessage>? GetAndClearContext()
+    {
+        var context = _currentContext;
+
+        if (context == null)
+        {
+            return null;
+        }
+
+        var messages = context.GetInFlightMessages();
+        ClearContext();
+
+        return messages;
+    }
+
+    private async Task<int> ProcessBatchAsync(IInboxConfiguration configuration, CancellationToken token)
     {
         var storageProvider = _inbox.GetStorageProvider();
-        var configuration = _inbox.GetConfiguration();
         var messages = await storageProvider.ReadAndCaptureAsync(_processorId, token);
 
         if (messages.Count == 0)
@@ -228,16 +229,8 @@ internal sealed class InboxProcessingLoop : IDisposable
             return 0;
         }
 
-        // Track captured messages so we can release them on shutdown or extend their locks
-        await _inFlightSemaphore.WaitAsync(token);
-        try
-        {
-            _currentlyCapturedMessages = messages;
-        }
-        finally
-        {
-            _inFlightSemaphore.Release();
-        }
+        // Create and store context for lock extension and shutdown
+        var context = CreateContext(storageProvider, configuration.Options, messages);
 
         Timer? lockExtensionTimer = null;
         CancellationTokenSource? timerCts = null;
@@ -263,32 +256,38 @@ internal sealed class InboxProcessingLoop : IDisposable
                 "Processing {Count} messages from inbox '{InboxName}'",
                 messages.Count, _inbox.Name);
 
-            await _strategy.ProcessAsync(_processorId, messages, token);
+            await _strategy.ProcessAsync(_processorId, messages, context, token);
         }
         finally
         {
-            // Cancel and dispose timer before clearing captured messages
             timerCts?.Cancel();
+
             if (lockExtensionTimer != null)
             {
                 await lockExtensionTimer.DisposeAsync();
             }
-            timerCts?.Dispose();
 
-            // Clear tracked messages after processing completes
-            // (they've been completed/failed/released by the strategy)
-            await _inFlightSemaphore.WaitAsync(CancellationToken.None);
-            try
-            {
-                _currentlyCapturedMessages = null;
-            }
-            finally
-            {
-                _inFlightSemaphore.Release();
-            }
+            timerCts?.Dispose();
+            ClearContext();
         }
 
         return messages.Count;
+    }
+
+    private MessageProcessingContext CreateContext(
+        IInboxStorageProvider storageProvider,
+        IInboxOptions options,
+        IReadOnlyList<InboxMessage> messages)
+    {
+        var context = new MessageProcessingContext(storageProvider, options, _logger, messages);
+        _currentContext = context;
+        return context;
+    }
+
+    private void ClearContext()
+    {
+        _currentContext?.Clear();
+        _currentContext = null;
     }
 
     private async void OnLockExtensionTimerElapsed(
@@ -334,17 +333,8 @@ internal sealed class InboxProcessingLoop : IDisposable
             return;
         }
 
-        IReadOnlyList<InboxMessage>? messagesToExtend;
-
-        await _inFlightSemaphore.WaitAsync(token);
-        try
-        {
-            messagesToExtend = _currentlyCapturedMessages;
-        }
-        finally
-        {
-            _inFlightSemaphore.Release();
-        }
+        // Get only messages that are still in-flight (not yet processed)
+        var messagesToExtend = _currentContext?.GetInFlightMessages();
 
         if (messagesToExtend is not { Count: > 0 })
         {
@@ -367,7 +357,7 @@ internal sealed class InboxProcessingLoop : IDisposable
             }
 
             _logger.LogDebug(
-                "Extended locks for {ExtendedCount}/{TotalCount} messages in inbox '{InboxName}'",
+                "Extended locks for {ExtendedCount}/{TotalCount} in-flight messages in inbox '{InboxName}'",
                 extended, messagesToExtend.Count, _inbox.Name);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)

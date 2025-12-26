@@ -12,10 +12,10 @@ namespace Rh.Inbox.Processing.Strategies.Implementation;
 internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrategyBase
 {
     private delegate Task ProcessGroupDelegate(
+        IMessageProcessingContext context,
         List<InboxMessage> messages,
         string groupId,
         IInboxMessagePayloadSerializer serializer,
-        IInboxStorageProvider storageProvider,
         CancellationToken token);
 
     private readonly BoundedDelegateCache<ProcessGroupDelegate> _delegateCache;
@@ -29,7 +29,11 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
         _delegateCache = new BoundedDelegateCache<ProcessGroupDelegate>(this, nameof(ProcessGroupAsync));
     }
 
-    public override async Task ProcessAsync(string processorId, IReadOnlyList<InboxMessage> messages, CancellationToken token)
+    public override async Task ProcessAsync(
+        string processorId,
+        IReadOnlyList<InboxMessage> messages,
+        IMessageProcessingContext context,
+        CancellationToken token)
     {
         var configuration = GetConfiguration();
         var storageProvider = GetStorageProvider();
@@ -60,13 +64,13 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
                     {
                         Logger.LogWarning("Unknown message type: {MessageType}", messageTypeName);
                         var reason = $"Unknown message type: {messageTypeName}";
-                        await storageProvider.MoveToDeadLetterBatchAsync(
-                            typeBatch.Select(m => (m.Id, reason)).ToList(), ct);
+                        await context.MoveToDeadLetterBatchAsync(
+                            typeBatch.Select(m => (m, reason)).ToList(), ct);
                         continue;
                     }
 
                     var processDelegate = _delegateCache.GetOrAdd(messageType);
-                    await processDelegate(typeBatch, groupId, serializer, storageProvider, ct);
+                    await processDelegate(context, typeBatch, groupId, serializer, ct);
                 }
             }
             finally
@@ -109,10 +113,10 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
     }
 
     private async Task ProcessGroupAsync<TMessage>(
+        IMessageProcessingContext context,
         List<InboxMessage> messages,
         string groupId,
         IInboxMessagePayloadSerializer serializer,
-        IInboxStorageProvider storageProvider,
         CancellationToken token) where TMessage : class, IHasGroupId
     {
         using var scope = ServiceProvider.CreateScope();
@@ -122,32 +126,32 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
         {
             Logger.LogWarning("No FIFO batched handler registered for message type: {MessageType}", typeof(TMessage).FullName);
             var reason = $"No FIFO batched handler registered for message type: {typeof(TMessage).FullName}";
-            await storageProvider.MoveToDeadLetterBatchAsync(
-                messages.Select(m => (m.Id, reason)).ToList(), token);
+            await context.MoveToDeadLetterBatchAsync(
+                messages.Select(m => (m, reason)).ToList(), token);
             return;
         }
 
         var envelopes = new List<InboxMessageEnvelope<TMessage>>();
-        var messagesById = new Dictionary<Guid, InboxMessage>();
-        var deserializationFailures = new List<Guid>();
+        var successfulMessages = new List<InboxMessage>();
+        var deserializationFailures = new List<InboxMessage>();
 
         foreach (var msg in messages)
         {
             var payload = serializer.Deserialize<TMessage>(msg.Payload);
             if (payload == null)
             {
-                deserializationFailures.Add(msg.Id);
+                deserializationFailures.Add(msg);
                 continue;
             }
 
             envelopes.Add(new InboxMessageEnvelope<TMessage>(msg.Id, payload));
-            messagesById[msg.Id] = msg;
+            successfulMessages.Add(msg);
         }
 
         if (deserializationFailures.Count > 0)
         {
-            await storageProvider.MoveToDeadLetterBatchAsync(
-                deserializationFailures.Select(id => (id, "Failed to deserialize message payload")).ToList(), token);
+            await context.MoveToDeadLetterBatchAsync(
+                deserializationFailures.Select(m => (m, "Failed to deserialize message payload")).ToList(), token);
         }
 
         if (envelopes.Count == 0)
@@ -170,13 +174,13 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
                 results = envelopes.Select(e => new InboxMessageResult(e.Id, InboxHandleResult.Failed)).ToArray();
             }
 
-            await ProcessResultsAsync(results, messagesById, storageProvider, token);
+            await context.ProcessResultsBatchAsync(results, token);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error executing FIFO batched handler for message type: {MessageType}, group: {GroupId}",
                 typeof(TMessage).FullName, groupId);
-            await FailMessageBatchAsync(messagesById.Values.ToList(), storageProvider, token);
+            await context.FailMessageBatchAsync(successfulMessages, token);
         }
     }
 }

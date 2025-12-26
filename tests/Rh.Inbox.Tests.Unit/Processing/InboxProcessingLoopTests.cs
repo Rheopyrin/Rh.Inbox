@@ -246,6 +246,7 @@ public class InboxProcessingLoopTests
         await _strategy.Received(1).ProcessAsync(
             Arg.Any<string>(),
             Arg.Is<IReadOnlyList<InboxMessage>>(m => m.Count == 1),
+            Arg.Any<IMessageProcessingContext>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -263,6 +264,7 @@ public class InboxProcessingLoopTests
         await _strategy.DidNotReceive().ProcessAsync(
             Arg.Any<string>(),
             Arg.Any<IReadOnlyList<InboxMessage>>(),
+            Arg.Any<IMessageProcessingContext>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -282,7 +284,7 @@ public class InboxProcessingLoopTests
                 };
             });
 
-        _strategy.ProcessAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<InboxMessage>>(), Arg.Any<CancellationToken>())
+        _strategy.ProcessAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<InboxMessage>>(), Arg.Any<IMessageProcessingContext>(), Arg.Any<CancellationToken>())
             .Returns<Task>(_ => throw new InvalidOperationException("Processing failed"));
 
         await loop.StartAsync(CancellationToken.None);
@@ -332,7 +334,7 @@ public class InboxProcessingLoopTests
 
         var processingCompleted = new TaskCompletionSource();
         var strategy = Substitute.For<IInboxProcessingStrategy>();
-        strategy.ProcessAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<InboxMessage>>(), Arg.Any<CancellationToken>())
+        strategy.ProcessAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<InboxMessage>>(), Arg.Any<IMessageProcessingContext>(), Arg.Any<CancellationToken>())
             .Returns(async _ =>
             {
                 await Task.Delay(150); // Wait long enough for lock extension to fire
