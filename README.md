@@ -51,7 +51,7 @@ A high-performance, flexible message inbox library for .NET applications. Rh.Inb
 - **Message Deduplication**: Prevent duplicate message processing
 - **Message Collapsing**: Replace older unprocessed messages with newer ones
 - **Dead Letter Queue**: Automatic handling of failed messages
-- **Retry Mechanism**: Configurable retry attempts with exponential backoff
+- **Retry Mechanism**: Configurable retry attempts for message processing and transient storage failures with exponential backoff
 - **ASP.NET Core Integration**: Seamless hosted service integration
 - **Lifecycle Hooks**: Extensible lifecycle management
 - **Lock Extension**: Automatic lock renewal for long-running batch processing
@@ -248,6 +248,13 @@ services.AddInbox("my-inbox", builder =>
             options.DeadLetterCleanup.BatchSize = 1000;
             options.DeduplicationCleanup.Interval = TimeSpan.FromMinutes(5);
             options.GroupLocksCleanup.Interval = TimeSpan.FromMinutes(5);
+
+            // Retry configuration for transient failures
+            options.Retry.MaxRetries = 3;                          // Default: 3
+            options.Retry.InitialDelay = TimeSpan.FromMilliseconds(100);
+            options.Retry.MaxDelay = TimeSpan.FromSeconds(5);
+            options.Retry.BackoffMultiplier = 2.0;
+            options.Retry.UseJitter = true;
         })
         .ConfigureOptions(options =>
         {
@@ -270,6 +277,7 @@ services.AddInbox("my-inbox", builder =>
 | `DeadLetterCleanup` | Dead letter cleanup task options | See below |
 | `DeduplicationCleanup` | Deduplication cleanup task options | See below |
 | `GroupLocksCleanup` | Group locks cleanup task options (FIFO) | See below |
+| `Retry` | Retry options for transient storage failures | See below |
 
 **Cleanup Task Options:**
 
@@ -280,6 +288,20 @@ Each cleanup task (`DeadLetterCleanup`, `DeduplicationCleanup`, `GroupLocksClean
 | `BatchSize` | Records to delete per batch | 1000 |
 | `Interval` | Time between cleanup cycles | 5 minutes |
 | `RestartDelay` | Delay before restart after failure | 30 seconds |
+
+**Retry Options:**
+
+Retry behavior for transient storage failures (connection timeouts, deadlocks, etc.):
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `MaxRetries` | Maximum number of retry attempts | 3 |
+| `InitialDelay` | Initial delay before the first retry | 100ms |
+| `MaxDelay` | Maximum delay between retries | 5 seconds |
+| `BackoffMultiplier` | Exponential backoff multiplier | 2.0 |
+| `UseJitter` | Add jitter to prevent thundering herd | `true` |
+
+Use `RetryOptions.None` to disable retries entirely.
 
 **Cleanup Task Activation:**
 
@@ -365,6 +387,11 @@ services.AddInbox("my-inbox", builder =>
             options.ConnectionString = "localhost:6379";
             options.KeyPrefix = "myapp:inbox";                     // Optional
             options.MaxMessageLifetime = TimeSpan.FromHours(24);   // Optional
+
+            // Retry configuration for transient failures
+            options.Retry.MaxRetries = 3;                          // Default: 3
+            options.Retry.InitialDelay = TimeSpan.FromMilliseconds(100);
+            options.Retry.MaxDelay = TimeSpan.FromSeconds(5);
         })
         .ConfigureOptions(options =>
         {
@@ -382,6 +409,11 @@ services.AddInbox("my-inbox", builder =>
 | `ConnectionString` | Redis connection string | Required |
 | `KeyPrefix` | Prefix for all Redis keys | `inbox:{inboxName}` |
 | `MaxMessageLifetime` | TTL for messages | 24 hours |
+| `Retry` | Retry options for transient storage failures | See Retry Options |
+
+**Retry Options:**
+
+See PostgreSQL section for full retry options documentation. Redis uses the same `RetryOptions` configuration.
 
 Note: Deduplication is configured via common options (`EnableDeduplication` and `DeduplicationInterval`).
 
