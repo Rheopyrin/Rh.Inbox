@@ -79,10 +79,16 @@ internal sealed class DefaultInboxProcessingStrategy : InboxProcessingStrategyBa
         try
         {
             var envelope = new InboxMessageEnvelope<TMessage>(message.Id, payload);
-            var result = await handler.HandleAsync(envelope, token);
+            InboxHandleResult result = default;
 
-            // Immediate result processing - release message as soon as handler completes
-            var messageResult = new InboxMessageResult(message.Id, result);
+            var completed = await ExecuteWithTimeoutAsync(
+                async ct => { result = await handler.HandleAsync(envelope, ct); },
+                $"message {message.Id}",
+                token);
+
+            // Use Failed result on timeout, letting ProcessResultsAsync handle max attempts logic
+            var handlerResult = completed ? result : InboxHandleResult.Failed;
+            var messageResult = new InboxMessageResult(message.Id, handlerResult);
             var messagesById = new Dictionary<Guid, InboxMessage> { { message.Id, message } };
             await ProcessResultsAsync([messageResult], messagesById, storageProvider, token);
         }

@@ -104,7 +104,19 @@ internal sealed class BatchedInboxProcessingStrategy : InboxProcessingStrategyBa
 
         try
         {
-            var results = await handler.HandleAsync(envelopes, token);
+            IReadOnlyList<InboxMessageResult> results = [];
+
+            var completed = await ExecuteWithTimeoutAsync(
+                async ct => { results = await handler.HandleAsync(envelopes, ct); },
+                $"batch of {envelopes.Count} messages of type {typeof(TMessage).FullName}",
+                token);
+
+            // On timeout, create Failed results for all messages in the batch
+            if (!completed)
+            {
+                results = envelopes.Select(e => new InboxMessageResult(e.Id, InboxHandleResult.Failed)).ToArray();
+            }
+
             await ProcessResultsAsync(results, messagesById, storageProvider, token);
         }
         catch (Exception ex)

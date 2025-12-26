@@ -32,6 +32,39 @@ internal abstract class InboxProcessingStrategyBase : IInboxProcessingStrategy
     protected IInboxStorageProvider GetStorageProvider() => Inbox.GetStorageProvider();
     protected IInboxMessagePayloadSerializer GetSerializer() => Inbox.GetSerializer();
 
+    /// <summary>
+    /// Executes an async handler action with a timeout based on MaxProcessingTime.
+    /// Creates a linked CancellationToken combining the external token with a timeout.
+    /// </summary>
+    /// <param name="action">The async action to execute (handler call)</param>
+    /// <param name="messageContext">Context for logging (e.g., message ID or batch description)</param>
+    /// <param name="externalToken">The external cancellation token</param>
+    /// <returns>True if completed successfully; False if timed out</returns>
+    protected async Task<bool> ExecuteWithTimeoutAsync(
+        Func<CancellationToken, Task> action,
+        string messageContext,
+        CancellationToken externalToken)
+    {
+        var options = GetConfiguration().Options;
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
+        timeoutCts.CancelAfter(options.MaxProcessingTime);
+
+        try
+        {
+            await action(timeoutCts.Token);
+            return true;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !externalToken.IsCancellationRequested)
+        {
+            Logger.LogWarning(
+                "Handler execution timed out after {MaxProcessingTime} for {MessageContext}",
+                options.MaxProcessingTime,
+                messageContext);
+            return false;
+        }
+    }
+
     private static string GetMaxAttemptsExceededReason(int maxAttempts) =>
         $"Max attempts ({maxAttempts}) exceeded";
 

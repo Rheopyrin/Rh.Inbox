@@ -102,6 +102,75 @@ public class ProcessingStrategyEdgeCasesTests
         }
     }
 
+    private class SlowHandler : IInboxHandler<TestMessage>
+    {
+        private readonly TimeSpan _delay;
+
+        public SlowHandler(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
+        public async Task<InboxHandleResult> HandleAsync(InboxMessageEnvelope<TestMessage> message, CancellationToken token)
+        {
+            await Task.Delay(_delay, token);
+            return InboxHandleResult.Success;
+        }
+    }
+
+    private class SlowFifoHandler : IFifoInboxHandler<FifoTestMessage>
+    {
+        private readonly TimeSpan _delay;
+
+        public SlowFifoHandler(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
+        public async Task<InboxHandleResult> HandleAsync(InboxMessageEnvelope<FifoTestMessage> message, CancellationToken token)
+        {
+            await Task.Delay(_delay, token);
+            return InboxHandleResult.Success;
+        }
+    }
+
+    private class SlowBatchedHandler : IBatchedInboxHandler<TestMessage>
+    {
+        private readonly TimeSpan _delay;
+
+        public SlowBatchedHandler(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
+        public async Task<IReadOnlyList<InboxMessageResult>> HandleAsync(
+            IReadOnlyList<InboxMessageEnvelope<TestMessage>> messages,
+            CancellationToken token)
+        {
+            await Task.Delay(_delay, token);
+            return messages.Select(m => new InboxMessageResult(m.Id, InboxHandleResult.Success)).ToList();
+        }
+    }
+
+    private class SlowFifoBatchedHandler : IFifoBatchedInboxHandler<FifoTestMessage>
+    {
+        private readonly TimeSpan _delay;
+
+        public SlowFifoBatchedHandler(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
+        public async Task<IReadOnlyList<InboxMessageResult>> HandleAsync(
+            string groupId,
+            IReadOnlyList<InboxMessageEnvelope<FifoTestMessage>> messages,
+            CancellationToken token)
+        {
+            await Task.Delay(_delay, token);
+            return messages.Select(m => new InboxMessageResult(m.Id, InboxHandleResult.Success)).ToList();
+        }
+    }
+
     #endregion
 
     #region Setup Helpers
@@ -111,9 +180,13 @@ public class ProcessingStrategyEdgeCasesTests
         string messageTypeName,
         Type? messageClrType,
         IInboxStorageProvider? storageProvider = null,
-        IInboxMessagePayloadSerializer? serializer = null)
+        IInboxMessagePayloadSerializer? serializer = null,
+        TimeSpan? maxProcessingTime = null)
     {
-        var options = TestConfigurationFactory.CreateOptions(inboxName: InboxName, maxAttempts: 3);
+        var options = TestConfigurationFactory.CreateOptions(
+            inboxName: InboxName,
+            maxAttempts: 3,
+            maxProcessingTime: maxProcessingTime);
 
         var metadataRegistry = Substitute.For<IInboxMessageMetadataRegistry>();
         metadataRegistry.GetClrType(messageTypeName).Returns(messageClrType);
@@ -953,6 +1026,259 @@ public class ProcessingStrategyEdgeCasesTests
         await groupLocksProvider.Received(1).ReleaseGroupLocksAsync(
             Arg.Is<IReadOnlyList<string>>(list => list.Contains("group-3")),
             Arg.Any<CancellationToken>());
+    }
+
+    #endregion
+
+    #region Handler Timeout Tests
+
+    [Fact]
+    public async Task Default_HandlerExceedsMaxProcessingTime_TimesOutAndFailsMessage()
+    {
+        // Arrange - MaxProcessingTime = 100ms, handler takes 500ms
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(
+            InboxType.Default,
+            MessageTypeName,
+            typeof(TestMessage),
+            storageProvider,
+            maxProcessingTime: TimeSpan.FromMilliseconds(100));
+        var handler = new SlowHandler(TimeSpan.FromMilliseconds(500));
+        var serviceProvider = CreateServiceProvider(handler);
+        var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var message = CreateMessage();
+
+        // Act
+        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+
+        // Assert - message should be failed via ProcessResultsBatchAsync (toFail list)
+        await storageProvider.Received(1).ProcessResultsBatchAsync(
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toComplete
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 1 && list.Contains(message.Id)), // toFail
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toRelease
+            Arg.Is<IReadOnlyList<(Guid, string)>>(list => list.Count == 0), // toDeadLetter
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Default_HandlerCompletesWithinTimeout_ProcessesNormally()
+    {
+        // Arrange - MaxProcessingTime = 500ms, handler takes 50ms
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(
+            InboxType.Default,
+            MessageTypeName,
+            typeof(TestMessage),
+            storageProvider,
+            maxProcessingTime: TimeSpan.FromMilliseconds(500));
+        var handler = new SlowHandler(TimeSpan.FromMilliseconds(50));
+        var serviceProvider = CreateServiceProvider(handler);
+        var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var message = CreateMessage();
+
+        // Act
+        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+
+        // Assert - message should be completed normally (not failed)
+        await storageProvider.Received(1).ProcessResultsBatchAsync(
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 1 && list.Contains(message.Id)), // toComplete
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toFail
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toRelease
+            Arg.Is<IReadOnlyList<(Guid, string)>>(list => list.Count == 0), // toDeadLetter
+            Arg.Any<CancellationToken>());
+        await storageProvider.DidNotReceive().FailAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Fifo_HandlerExceedsMaxProcessingTime_TimesOutAndFailsMessage()
+    {
+        // Arrange - MaxProcessingTime = 100ms, handler takes 500ms
+        var storageProvider = CreateMockStorageProvider(supportGroupLocks: true);
+        var inbox = CreateMockInbox(
+            InboxType.Fifo,
+            FifoMessageTypeName,
+            typeof(FifoTestMessage),
+            storageProvider,
+            maxProcessingTime: TimeSpan.FromMilliseconds(100));
+        var handler = new SlowFifoHandler(TimeSpan.FromMilliseconds(500));
+        var serviceProvider = CreateServiceProvider(handler);
+        var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var message = CreateMessage(FifoMessageTypeName, "group-1");
+
+        // Act
+        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+
+        // Assert - message should be failed via ProcessResultsBatchAsync (toFail list)
+        await storageProvider.Received(1).ProcessResultsBatchAsync(
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toComplete
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 1 && list.Contains(message.Id)), // toFail
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toRelease
+            Arg.Is<IReadOnlyList<(Guid, string)>>(list => list.Count == 0), // toDeadLetter
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Batched_HandlerExceedsMaxProcessingTime_TimesOutAndFailsBatch()
+    {
+        // Arrange - MaxProcessingTime = 100ms, handler takes 500ms
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(
+            InboxType.Batched,
+            MessageTypeName,
+            typeof(TestMessage),
+            storageProvider,
+            maxProcessingTime: TimeSpan.FromMilliseconds(100));
+        var handler = new SlowBatchedHandler(TimeSpan.FromMilliseconds(500));
+        var serviceProvider = CreateServiceProvider(handler);
+        var strategy = new BatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var messages = new[] { CreateMessage(), CreateMessage() };
+
+        // Act
+        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+
+        // Assert - all messages should be failed via ProcessResultsBatchAsync (toFail list)
+        await storageProvider.Received(1).ProcessResultsBatchAsync(
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toComplete
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 2), // toFail
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toRelease
+            Arg.Is<IReadOnlyList<(Guid, string)>>(list => list.Count == 0), // toDeadLetter
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task FifoBatched_HandlerExceedsMaxProcessingTime_TimesOutAndFailsBatch()
+    {
+        // Arrange - MaxProcessingTime = 100ms, handler takes 500ms
+        var storageProvider = CreateMockStorageProvider(supportGroupLocks: true);
+        var inbox = CreateMockInbox(
+            InboxType.FifoBatched,
+            FifoMessageTypeName,
+            typeof(FifoTestMessage),
+            storageProvider,
+            maxProcessingTime: TimeSpan.FromMilliseconds(100));
+        var handler = new SlowFifoBatchedHandler(TimeSpan.FromMilliseconds(500));
+        var serviceProvider = CreateServiceProvider(handler);
+        var strategy = new FifoBatchedInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var messages = new[]
+        {
+            CreateMessage(FifoMessageTypeName, "group-1"),
+            CreateMessage(FifoMessageTypeName, "group-1")
+        };
+
+        // Act
+        await strategy.ProcessAsync("processor-1", messages, CancellationToken.None);
+
+        // Assert - all messages should be failed via ProcessResultsBatchAsync (toFail list)
+        await storageProvider.Received(1).ProcessResultsBatchAsync(
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toComplete
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 2), // toFail
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toRelease
+            Arg.Is<IReadOnlyList<(Guid, string)>>(list => list.Count == 0), // toDeadLetter
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Default_TimeoutWithMaxAttemptsExceeded_MovesToDeadLetter()
+    {
+        // Arrange - timeout + max attempts exceeded should move to dead letter
+        var storageProvider = CreateMockStorageProvider();
+        var inbox = CreateMockInbox(
+            InboxType.Default,
+            MessageTypeName,
+            typeof(TestMessage),
+            storageProvider,
+            maxProcessingTime: TimeSpan.FromMilliseconds(100));
+        var handler = new SlowHandler(TimeSpan.FromMilliseconds(500));
+        var serviceProvider = CreateServiceProvider(handler);
+        var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var message = CreateMessage(attemptsCount: 2); // MaxAttempts is 3, so this will exceed
+
+        // Act
+        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+
+        // Assert - message should be moved to dead letter via ProcessResultsBatchAsync (toDeadLetter list)
+        await storageProvider.Received(1).ProcessResultsBatchAsync(
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toComplete
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toFail
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 0), // toRelease
+            Arg.Is<IReadOnlyList<(Guid, string)>>(list => list.Count == 1 && list.Any(x => x.Item1 == message.Id && x.Item2.Contains("Max attempts"))), // toDeadLetter
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Fifo_TimeoutStillReleasesGroupLock()
+    {
+        // Arrange - timeout should still release group lock
+        var storageProvider = CreateMockStorageProvider(supportGroupLocks: true);
+        var groupLocksProvider = (ISupportGroupLocksReleaseStorageProvider)storageProvider;
+        var inbox = CreateMockInbox(
+            InboxType.Fifo,
+            FifoMessageTypeName,
+            typeof(FifoTestMessage),
+            storageProvider,
+            maxProcessingTime: TimeSpan.FromMilliseconds(100));
+        var handler = new SlowFifoHandler(TimeSpan.FromMilliseconds(500));
+        var serviceProvider = CreateServiceProvider(handler);
+        var strategy = new FifoInboxProcessingStrategy(inbox, serviceProvider, Substitute.For<ILogger>());
+        var message = CreateMessage(FifoMessageTypeName, "group-1");
+
+        // Act
+        await strategy.ProcessAsync("processor-1", [message], CancellationToken.None);
+
+        // Assert - group lock should still be released even on timeout
+        await groupLocksProvider.Received(1).ReleaseGroupLocksAsync(
+            Arg.Is<IReadOnlyList<string>>(list => list.Count == 1 && list.Contains("group-1")),
+            Arg.Any<CancellationToken>());
+        // And the message should be failed via ProcessResultsBatchAsync
+        await storageProvider.Received(1).ProcessResultsBatchAsync(
+            Arg.Any<IReadOnlyList<Guid>>(),
+            Arg.Is<IReadOnlyList<Guid>>(list => list.Count == 1 && list.Contains(message.Id)), // toFail
+            Arg.Any<IReadOnlyList<Guid>>(),
+            Arg.Any<IReadOnlyList<(Guid, string)>>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Default_ExternalCancellation_DoesNotTreatAsTimeout()
+    {
+        // Arrange - external cancellation should not log timeout warning
+        // (but message will still be failed due to the outer exception handling)
+        var storageProvider = CreateMockStorageProvider();
+        var logger = Substitute.For<ILogger>();
+        var inbox = CreateMockInbox(
+            InboxType.Default,
+            MessageTypeName,
+            typeof(TestMessage),
+            storageProvider,
+            maxProcessingTime: TimeSpan.FromSeconds(10)); // Long timeout
+        var handler = new SlowHandler(TimeSpan.FromSeconds(5)); // Takes 5 seconds
+        var serviceProvider = CreateServiceProvider(handler);
+        var strategy = new DefaultInboxProcessingStrategy(inbox, serviceProvider, logger);
+        var message = CreateMessage();
+
+        using var cts = new CancellationTokenSource();
+
+        // Cancel after 50ms (before handler completes but well before timeout)
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(50);
+            cts.Cancel();
+        });
+
+        // Act
+        await strategy.ProcessAsync("processor-1", [message], cts.Token);
+
+        // Assert - message gets failed (caught by outer exception handler)
+        // but NOT due to timeout, so timeout warning should NOT be logged
+        await storageProvider.Received(1).FailAsync(message.Id, Arg.Any<CancellationToken>());
+
+        // Verify no timeout warning was logged (would contain "timed out after")
+        logger.DidNotReceive().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Is<object>(o => o != null && o.ToString()!.Contains("timed out")),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
     }
 
     #endregion
