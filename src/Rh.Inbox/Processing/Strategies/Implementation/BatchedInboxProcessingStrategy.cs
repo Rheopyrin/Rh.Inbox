@@ -78,25 +78,23 @@ internal sealed class BatchedInboxProcessingStrategy : InboxProcessingStrategyBa
 
         var envelopes = new List<InboxMessageEnvelope<TMessage>>(messages.Count);
         var successfulMessages = new List<InboxMessage>(messages.Count);
-        var deserializationFailures = new List<InboxMessage>(messages.Count);
+        var deserializationFailures = new List<(InboxMessage Message, string Reason)>();
 
         foreach (var msg in messages)
         {
-            var payload = serializer.Deserialize<TMessage>(msg.Payload);
-            if (payload == null)
+            if (!TryDeserializePayload<TMessage>(serializer, msg.Payload, msg.Id, out var payload, out var errorReason))
             {
-                deserializationFailures.Add(msg);
+                deserializationFailures.Add((msg, errorReason!));
                 continue;
             }
 
-            envelopes.Add(new InboxMessageEnvelope<TMessage>(msg.Id, payload));
+            envelopes.Add(new InboxMessageEnvelope<TMessage>(msg.Id, payload!));
             successfulMessages.Add(msg);
         }
 
         if (deserializationFailures.Count > 0)
         {
-            await context.MoveToDeadLetterBatchAsync(
-                deserializationFailures.Select(m => (m, "Failed to deserialize message payload")).ToArray(), token);
+            await context.MoveToDeadLetterBatchAsync(deserializationFailures.ToArray(), token);
         }
 
         if (envelopes.Count == 0)

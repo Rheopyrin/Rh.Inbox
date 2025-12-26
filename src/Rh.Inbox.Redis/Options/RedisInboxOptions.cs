@@ -1,5 +1,6 @@
 using Rh.Inbox.Abstractions.Providers;
 using Rh.Inbox.Providers;
+using Rh.Inbox.Resilience;
 
 namespace Rh.Inbox.Redis.Options;
 
@@ -45,4 +46,11 @@ public class RedisInboxOptions
     /// Default is 24 hours.
     /// </summary>
     public TimeSpan MaxMessageLifetime { get; set; } = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Gets or sets the retry options for transient storage failures.
+    /// Default enables 3 retries with exponential backoff.
+    /// Set to <see cref="RetryOptions.None"/> to disable retries.
+    /// </summary>
+    public RetryOptions Retry { get; set; } = RetryOptions.Default;
 }

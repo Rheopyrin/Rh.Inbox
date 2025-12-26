@@ -30,6 +30,7 @@ internal sealed class ProviderOptionsAccessor : IProviderOptionsAccessor
             DeadLetterTableName = options.DeadLetterTableName ?? Utility.PostgresIdentifierHelper.BuildTableName(PostgresInboxOptions.DefaultDeadLetterTablePrefix, inboxName),
             DeduplicationTableName = options.DeduplicationTableName ?? Utility.PostgresIdentifierHelper.BuildTableName(PostgresInboxOptions.DefaultDeduplicationTablePrefix, inboxName),
             GroupLocksTableName = Utility.PostgresIdentifierHelper.BuildTableName(PostgresInboxOptions.DefaultGroupLocksTablePrefix, inboxName),
+            Retry = options.Retry
         };
     }
 }

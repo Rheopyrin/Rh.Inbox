@@ -1,10 +1,13 @@
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using Rh.Inbox.Abstractions.Configuration;
 using Rh.Inbox.Abstractions.Health;
 using Rh.Inbox.Abstractions.Messages;
 using Rh.Inbox.Abstractions.Storage;
 using Rh.Inbox.Postgres.Options;
+using Rh.Inbox.Postgres.Resilience;
 using Rh.Inbox.Postgres.Scripts;
+using Rh.Inbox.Resilience;
 
 namespace Rh.Inbox.Postgres.Provider;
 
@@ -13,15 +16,21 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
     protected readonly PostgresInboxProviderOptions PostgresOptions;
     protected readonly IInboxConfiguration Configuration;
     protected readonly IPostgresSqlScripts Sql;
+    protected readonly RetryExecutor RetryExecutor;
 
     protected PostgresInboxStorageProviderBase(
         IInboxConfiguration configuration,
         IProviderOptionsAccessor optionsAccessor,
-        IPostgresSqlScripts sql)
+        IPostgresSqlScripts sql,
+        ILogger logger)
     {
         PostgresOptions = optionsAccessor.GetForInbox(configuration.InboxName);
         Configuration = configuration;
         Sql = sql;
+        RetryExecutor = new RetryExecutor(
+            PostgresOptions.Retry,
+            new PostgresTransientExceptionClassifier(),
+            logger);
     }
 
     protected bool IsDeduplicationEnabled => Configuration.Options.EnableDeduplication;
@@ -55,13 +64,16 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
             return 0;
         }
 
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-        await using var cmd = new NpgsqlCommand(Sql.ExtendMessageLocks, connection);
-        cmd.Parameters.AddWithValue("messageIds", capturedMessages.Select(m => m.Id).ToArray());
-        cmd.Parameters.AddWithValue("processorId", processorId);
-        cmd.Parameters.AddWithValue("newCapturedAt", newCapturedAt);
+        return await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+            await using var cmd = new NpgsqlCommand(Sql.ExtendMessageLocks, connection);
+            cmd.Parameters.AddWithValue("messageIds", capturedMessages.Select(m => m.Id).ToArray());
+            cmd.Parameters.AddWithValue("processorId", processorId);
+            cmd.Parameters.AddWithValue("newCapturedAt", newCapturedAt);
 
-        return await cmd.ExecuteNonQueryAsync(token);
+            return await cmd.ExecuteNonQueryAsync(ct);
+        }, token);
     }
 
     #endregion
@@ -70,33 +82,36 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
 
     public async Task WriteAsync(InboxMessage message, CancellationToken token)
     {
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-
-        if (IsDeduplicationEnabled && !string.IsNullOrEmpty(message.DeduplicationId))
+        await RetryExecutor.ExecuteAsync(async ct =>
         {
-            var isDuplicate = await TryInsertDeduplicationRecordAsync(connection, null, message.DeduplicationId, token);
-            if (isDuplicate)
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+
+            if (IsDeduplicationEnabled && !string.IsNullOrEmpty(message.DeduplicationId))
             {
-                return;
+                var isDuplicate = await TryInsertDeduplicationRecordAsync(connection, null, message.DeduplicationId, ct);
+                if (isDuplicate)
+                {
+                    return;
+                }
             }
-        }
 
-        var sql = !string.IsNullOrEmpty(message.CollapseKey)
-            ? Sql.InsertWithCollapse
-            : Sql.Insert;
+            var sql = !string.IsNullOrEmpty(message.CollapseKey)
+                ? Sql.InsertWithCollapse
+                : Sql.Insert;
 
-        await using var cmd = new NpgsqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue("id", message.Id);
-        cmd.Parameters.AddWithValue("inboxName", Configuration.InboxName);
-        cmd.Parameters.AddWithValue("messageType", message.MessageType);
-        cmd.Parameters.AddWithValue("payload", message.Payload);
-        cmd.Parameters.AddWithValue("groupId", (object?)message.GroupId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("collapseKey", (object?)message.CollapseKey ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("deduplicationId", (object?)message.DeduplicationId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("attemptsCount", message.AttemptsCount);
-        cmd.Parameters.AddWithValue("receivedAt", message.ReceivedAt);
+            await using var cmd = new NpgsqlCommand(sql, connection);
+            cmd.Parameters.AddWithValue("id", message.Id);
+            cmd.Parameters.AddWithValue("inboxName", Configuration.InboxName);
+            cmd.Parameters.AddWithValue("messageType", message.MessageType);
+            cmd.Parameters.AddWithValue("payload", message.Payload);
+            cmd.Parameters.AddWithValue("groupId", (object?)message.GroupId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("collapseKey", (object?)message.CollapseKey ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("deduplicationId", (object?)message.DeduplicationId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("attemptsCount", message.AttemptsCount);
+            cmd.Parameters.AddWithValue("receivedAt", message.ReceivedAt);
 
-        await cmd.ExecuteNonQueryAsync(token);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }, token);
     }
 
     private async Task<bool> TryInsertDeduplicationRecordAsync(
@@ -128,28 +143,31 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
             return;
         }
 
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-        await using var transaction = await connection.BeginTransactionAsync(token);
-
-        try
+        await RetryExecutor.ExecuteAsync(async ct =>
         {
-            var filteredBatch = IsDeduplicationEnabled
-                ? await FilterDuplicatesAsync(connection, transaction, messageList, token)
-                : messageList;
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+            await using var transaction = await connection.BeginTransactionAsync(ct);
 
-            if (filteredBatch.Length > 0)
+            try
             {
-                await DeleteCollapsedMessagesAsync(connection, transaction, filteredBatch, token);
-                await InsertBatchAsync(connection, transaction, filteredBatch, token);
-            }
+                var filteredBatch = IsDeduplicationEnabled
+                    ? await FilterDuplicatesAsync(connection, transaction, messageList, ct)
+                    : messageList;
 
-            await transaction.CommitAsync(token);
-        }
-        catch
-        {
-            await transaction.RollbackAsync(token);
-            throw;
-        }
+                if (filteredBatch.Length > 0)
+                {
+                    await DeleteCollapsedMessagesAsync(connection, transaction, filteredBatch, ct);
+                    await InsertBatchAsync(connection, transaction, filteredBatch, ct);
+                }
+
+                await transaction.CommitAsync(ct);
+            }
+            catch
+            {
+                await transaction.RollbackAsync(ct);
+                throw;
+            }
+        }, token);
     }
 
     private async Task<InboxMessage[]> FilterDuplicatesAsync(
@@ -264,20 +282,26 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
 
     public async Task FailAsync(Guid messageId, CancellationToken token)
     {
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-        await using var cmd = new NpgsqlCommand(Sql.Fail, connection);
-        cmd.Parameters.AddWithValue("id", messageId);
-        await cmd.ExecuteNonQueryAsync(token);
+        await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+            await using var cmd = new NpgsqlCommand(Sql.Fail, connection);
+            cmd.Parameters.AddWithValue("id", messageId);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }, token);
     }
 
     public async Task FailBatchAsync(IReadOnlyList<Guid> messageIds, CancellationToken token)
     {
         if (messageIds.Count == 0) return;
 
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-        await using var cmd = new NpgsqlCommand(Sql.FailBatch, connection);
-        cmd.Parameters.AddWithValue("ids", AsArray(messageIds));
-        await cmd.ExecuteNonQueryAsync(token);
+        await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+            await using var cmd = new NpgsqlCommand(Sql.FailBatch, connection);
+            cmd.Parameters.AddWithValue("ids", AsArray(messageIds));
+            await cmd.ExecuteNonQueryAsync(ct);
+        }, token);
     }
 
     public async Task MoveToDeadLetterAsync(Guid messageId, string reason, CancellationToken token)
@@ -289,29 +313,32 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
     {
         if (messages.Count == 0) return;
 
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-        await using var transaction = await connection.BeginTransactionAsync(token);
-
-        try
+        await RetryExecutor.ExecuteAsync(async ct =>
         {
-            var messageIds = messages.Select(m => m.MessageId).ToArray();
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+            await using var transaction = await connection.BeginTransactionAsync(ct);
 
-            if (Configuration.Options.EnableDeadLetter)
+            try
             {
-                await InsertToDeadLetterAsync(connection, transaction, messages, token);
+                var messageIds = messages.Select(m => m.MessageId).ToArray();
+
+                if (Configuration.Options.EnableDeadLetter)
+                {
+                    await InsertToDeadLetterAsync(connection, transaction, messages, ct);
+                }
+
+                await using var deleteCmd = new NpgsqlCommand(Sql.DeleteBatch, connection, transaction);
+                deleteCmd.Parameters.AddWithValue("ids", messageIds);
+                await deleteCmd.ExecuteNonQueryAsync(ct);
+
+                await transaction.CommitAsync(ct);
             }
-
-            await using var deleteCmd = new NpgsqlCommand(Sql.DeleteBatch, connection, transaction);
-            deleteCmd.Parameters.AddWithValue("ids", messageIds);
-            await deleteCmd.ExecuteNonQueryAsync(token);
-
-            await transaction.CommitAsync(token);
-        }
-        catch
-        {
-            await transaction.RollbackAsync(token);
-            throw;
-        }
+            catch
+            {
+                await transaction.RollbackAsync(ct);
+                throw;
+            }
+        }, token);
     }
 
     private async Task InsertToDeadLetterAsync(
@@ -344,10 +371,13 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
     {
         if (messageIds.Count == 0) return;
 
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-        await using var cmd = new NpgsqlCommand(Sql.ReleaseBatch, connection);
-        cmd.Parameters.AddWithValue("ids", AsArray(messageIds));
-        await cmd.ExecuteNonQueryAsync(token);
+        await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+            await using var cmd = new NpgsqlCommand(Sql.ReleaseBatch, connection);
+            cmd.Parameters.AddWithValue("ids", AsArray(messageIds));
+            await cmd.ExecuteNonQueryAsync(ct);
+        }, token);
     }
 
     public async Task ProcessResultsBatchAsync(
@@ -360,53 +390,56 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
         var hasWork = toComplete.Count > 0 || toFail.Count > 0 || toRelease.Count > 0 || toDeadLetter.Count > 0;
         if (!hasWork) return;
 
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-        await using var transaction = await connection.BeginTransactionAsync(token);
-
-        try
+        await RetryExecutor.ExecuteAsync(async ct =>
         {
-            if (toComplete.Count > 0)
-            {
-                await using var cmd = new NpgsqlCommand(Sql.CompleteBatch, connection, transaction);
-                cmd.Parameters.AddWithValue("ids", AsArray(toComplete));
-                await cmd.ExecuteNonQueryAsync(token);
-            }
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+            await using var transaction = await connection.BeginTransactionAsync(ct);
 
-            if (toFail.Count > 0)
+            try
             {
-                await using var cmd = new NpgsqlCommand(Sql.FailBatch, connection, transaction);
-                cmd.Parameters.AddWithValue("ids", AsArray(toFail));
-                await cmd.ExecuteNonQueryAsync(token);
-            }
-
-            if (toRelease.Count > 0)
-            {
-                await using var cmd = new NpgsqlCommand(Sql.ReleaseBatch, connection, transaction);
-                cmd.Parameters.AddWithValue("ids", AsArray(toRelease));
-                await cmd.ExecuteNonQueryAsync(token);
-            }
-
-            if (toDeadLetter.Count > 0)
-            {
-                var messageIds = toDeadLetter.Select(m => m.MessageId).ToArray();
-
-                if (Configuration.Options.EnableDeadLetter)
+                if (toComplete.Count > 0)
                 {
-                    await InsertToDeadLetterAsync(connection, transaction, toDeadLetter, token);
+                    await using var cmd = new NpgsqlCommand(Sql.CompleteBatch, connection, transaction);
+                    cmd.Parameters.AddWithValue("ids", AsArray(toComplete));
+                    await cmd.ExecuteNonQueryAsync(ct);
                 }
 
-                await using var deleteCmd = new NpgsqlCommand(Sql.DeleteBatch, connection, transaction);
-                deleteCmd.Parameters.AddWithValue("ids", messageIds);
-                await deleteCmd.ExecuteNonQueryAsync(token);
-            }
+                if (toFail.Count > 0)
+                {
+                    await using var cmd = new NpgsqlCommand(Sql.FailBatch, connection, transaction);
+                    cmd.Parameters.AddWithValue("ids", AsArray(toFail));
+                    await cmd.ExecuteNonQueryAsync(ct);
+                }
 
-            await transaction.CommitAsync(token);
-        }
-        catch
-        {
-            await transaction.RollbackAsync(token);
-            throw;
-        }
+                if (toRelease.Count > 0)
+                {
+                    await using var cmd = new NpgsqlCommand(Sql.ReleaseBatch, connection, transaction);
+                    cmd.Parameters.AddWithValue("ids", AsArray(toRelease));
+                    await cmd.ExecuteNonQueryAsync(ct);
+                }
+
+                if (toDeadLetter.Count > 0)
+                {
+                    var messageIds = toDeadLetter.Select(m => m.MessageId).ToArray();
+
+                    if (Configuration.Options.EnableDeadLetter)
+                    {
+                        await InsertToDeadLetterAsync(connection, transaction, toDeadLetter, ct);
+                    }
+
+                    await using var deleteCmd = new NpgsqlCommand(Sql.DeleteBatch, connection, transaction);
+                    deleteCmd.Parameters.AddWithValue("ids", messageIds);
+                    await deleteCmd.ExecuteNonQueryAsync(ct);
+                }
+
+                await transaction.CommitAsync(ct);
+            }
+            catch
+            {
+                await transaction.RollbackAsync(ct);
+                throw;
+            }
+        }, token);
     }
 
     public async Task<IReadOnlyList<DeadLetterMessage>> ReadDeadLettersAsync(int count, CancellationToken token)
@@ -416,32 +449,35 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
             return [];
         }
 
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-        await using var cmd = new NpgsqlCommand(Sql.ReadDeadLetters, connection);
-        cmd.Parameters.AddWithValue("inboxName", Configuration.InboxName);
-        cmd.Parameters.AddWithValue("count", count);
-
-        var result = new List<DeadLetterMessage>();
-
-        await using var reader = await cmd.ExecuteReaderAsync(token);
-        while (await reader.ReadAsync(token))
+        return await RetryExecutor.ExecuteAsync(async ct =>
         {
-            result.Add(new DeadLetterMessage
-            {
-                Id = reader.GetGuid(0),
-                InboxName = reader.GetString(1),
-                MessageType = reader.GetString(2),
-                Payload = reader.GetString(3),
-                GroupId = reader.IsDBNull(4) ? null : reader.GetString(4),
-                CollapseKey = reader.IsDBNull(5) ? null : reader.GetString(5),
-                AttemptsCount = reader.GetInt32(6),
-                ReceivedAt = reader.GetDateTime(7),
-                FailureReason = reader.GetString(8),
-                MovedAt = reader.GetDateTime(9)
-            });
-        }
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
+            await using var cmd = new NpgsqlCommand(Sql.ReadDeadLetters, connection);
+            cmd.Parameters.AddWithValue("inboxName", Configuration.InboxName);
+            cmd.Parameters.AddWithValue("count", count);
 
-        return result;
+            var result = new List<DeadLetterMessage>();
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                result.Add(new DeadLetterMessage
+                {
+                    Id = reader.GetGuid(0),
+                    InboxName = reader.GetString(1),
+                    MessageType = reader.GetString(2),
+                    Payload = reader.GetString(3),
+                    GroupId = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    CollapseKey = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    AttemptsCount = reader.GetInt32(6),
+                    ReceivedAt = reader.GetDateTime(7),
+                    FailureReason = reader.GetString(8),
+                    MovedAt = reader.GetDateTime(9)
+                });
+            }
+
+            return result;
+        }, token);
     }
 
     #endregion
@@ -450,26 +486,29 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
 
     public async Task<InboxHealthMetrics> GetHealthMetricsAsync(CancellationToken token)
     {
-        await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
-
-        var sql = Configuration.Options.EnableDeadLetter
-            ? Sql.HealthMetricsWithDlq
-            : Sql.HealthMetricsWithoutDlq;
-
-        await using var cmd = new NpgsqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue("inboxName", Configuration.Options.InboxName);
-
-        await using var reader = await cmd.ExecuteReaderAsync(token);
-        if (await reader.ReadAsync(token))
+        return await RetryExecutor.ExecuteAsync(async ct =>
         {
-            return new InboxHealthMetrics(
-                reader.GetInt64(0),
-                reader.GetInt64(1),
-                reader.GetInt64(2),
-                reader.IsDBNull(3) ? null : reader.GetDateTime(3));
-        }
+            await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(ct);
 
-        return new InboxHealthMetrics(0, 0, 0, null);
+            var sql = Configuration.Options.EnableDeadLetter
+                ? Sql.HealthMetricsWithDlq
+                : Sql.HealthMetricsWithoutDlq;
+
+            await using var cmd = new NpgsqlCommand(sql, connection);
+            cmd.Parameters.AddWithValue("inboxName", Configuration.Options.InboxName);
+
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (await reader.ReadAsync(ct))
+            {
+                return new InboxHealthMetrics(
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetInt64(2),
+                    reader.IsDBNull(3) ? null : reader.GetDateTime(3));
+            }
+
+            return new InboxHealthMetrics(0, 0, 0, null);
+        }, token);
     }
 
     #endregion

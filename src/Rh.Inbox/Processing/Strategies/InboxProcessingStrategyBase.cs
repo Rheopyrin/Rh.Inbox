@@ -34,6 +34,44 @@ internal abstract class InboxProcessingStrategyBase : IInboxProcessingStrategy
     protected IInboxMessagePayloadSerializer GetSerializer() => Inbox.GetSerializer();
 
     /// <summary>
+    /// Attempts to deserialize a message payload safely, catching any deserialization exceptions.
+    /// </summary>
+    /// <typeparam name="T">The type to deserialize to.</typeparam>
+    /// <param name="serializer">The serializer to use.</param>
+    /// <param name="payload">The raw payload string.</param>
+    /// <param name="messageId">The message ID for logging purposes.</param>
+    /// <param name="result">The deserialized result if successful.</param>
+    /// <param name="errorReason">The error reason if deserialization failed.</param>
+    /// <returns>True if deserialization succeeded; false otherwise.</returns>
+    protected bool TryDeserializePayload<T>(
+        IInboxMessagePayloadSerializer serializer,
+        string payload,
+        Guid messageId,
+        out T? result,
+        out string? errorReason)
+    {
+        try
+        {
+            result = serializer.Deserialize<T>(payload);
+            if (result == null)
+            {
+                errorReason = "Failed to deserialize message payload: result was null";
+                return false;
+            }
+
+            errorReason = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to deserialize payload for message {MessageId}: {Error}", messageId, ex.Message);
+            result = default;
+            errorReason = $"Failed to deserialize message payload: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Executes an async handler action with a timeout based on MaxProcessingTime.
     /// Creates a linked CancellationToken combining the external token with a timeout.
     /// </summary>

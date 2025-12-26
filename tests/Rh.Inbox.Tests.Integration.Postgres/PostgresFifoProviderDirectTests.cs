@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using NSubstitute;
 using Rh.Inbox.Abstractions;
@@ -477,7 +478,7 @@ public class PostgresFifoProviderDirectTests : IAsyncLifetime
         await CleanupTablesAsync();
         var config = CreateConfiguration(batchSize);
         var optionsAccessor = CreateMockOptionsAccessor();
-        var provider = new PostgresFifoInboxStorageProvider(config, optionsAccessor);
+        var provider = new PostgresFifoInboxStorageProvider(config, optionsAccessor, NullLogger<PostgresFifoInboxStorageProvider>.Instance);
         await provider.MigrateAsync(CancellationToken.None);
         return provider;
     }

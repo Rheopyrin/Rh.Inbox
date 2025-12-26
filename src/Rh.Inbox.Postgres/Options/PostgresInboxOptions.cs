@@ -1,3 +1,5 @@
+using Rh.Inbox.Resilience;
+
 namespace Rh.Inbox.Postgres.Options;
 
 /// <summary>
@@ -68,4 +70,11 @@ public class PostgresInboxOptions
     /// Gets or sets the options for the group locks cleanup task.
     /// </summary>
     public CleanupTaskOptions GroupLocksCleanup { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets the retry options for transient storage failures.
+    /// Default enables 3 retries with exponential backoff.
+    /// Set to <see cref="RetryOptions.None"/> to disable retries.
+    /// </summary>
+    public RetryOptions Retry { get; set; } = RetryOptions.Default;
 }

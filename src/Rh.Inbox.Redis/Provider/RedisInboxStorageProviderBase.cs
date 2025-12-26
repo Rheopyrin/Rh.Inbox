@@ -1,10 +1,13 @@
+using Microsoft.Extensions.Logging;
 using Rh.Inbox.Abstractions.Configuration;
 using Rh.Inbox.Abstractions.Health;
 using Rh.Inbox.Abstractions.Messages;
 using Rh.Inbox.Abstractions.Storage;
 using Rh.Inbox.Redis.Options;
 using Rh.Inbox.Redis.Provider.Scripts;
+using Rh.Inbox.Redis.Resilience;
 using Rh.Inbox.Redis.Utility;
+using Rh.Inbox.Resilience;
 using StackExchange.Redis;
 
 namespace Rh.Inbox.Redis.Provider;
@@ -14,6 +17,7 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
     protected readonly RedisInboxProviderOptions RedisOptions;
     protected readonly RedisIdentifiers Keys;
     protected readonly IInboxConfiguration Configuration;
+    protected readonly RetryExecutor RetryExecutor;
 
     private bool _disposed;
 
@@ -29,11 +33,18 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
     protected string EnableDeadLetterFlag => Configuration.Options.EnableDeadLetter ? "1" : "0";
 
-    protected RedisInboxStorageProviderBase(IProviderOptionsAccessor optionsAccessor, IInboxConfiguration configuration)
+    protected RedisInboxStorageProviderBase(
+        IProviderOptionsAccessor optionsAccessor,
+        IInboxConfiguration configuration,
+        ILogger logger)
     {
         RedisOptions = optionsAccessor.GetForInbox(configuration.InboxName);
         Keys = new RedisIdentifiers(RedisOptions.KeyPrefix);
         Configuration = configuration;
+        RetryExecutor = new RetryExecutor(
+            RedisOptions.Retry,
+            new RedisTransientExceptionClassifier(),
+            logger);
     }
 
     /// <summary>
@@ -74,8 +85,11 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
     public async Task WriteAsync(InboxMessage message, CancellationToken token)
     {
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
-        await db.ScriptEvaluateAsync(RedisScripts.Write, CreateWriteParameters(message)).ConfigureAwait(false);
+        await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
+            await db.ScriptEvaluateAsync(RedisScripts.Write, CreateWriteParameters(message)).ConfigureAwait(false);
+        }, token);
     }
 
     public async Task WriteBatchAsync(IEnumerable<InboxMessage> messages, CancellationToken token)
@@ -86,8 +100,6 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         {
             return;
         }
-
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
 
         var simpleMessages = new List<InboxMessage>(messageList.Count);
         var collapseMessages = new List<InboxMessage>(messageList.Count);
@@ -104,15 +116,20 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
             }
         }
 
-        if (simpleMessages.Count > 0)
+        await RetryExecutor.ExecuteAsync(async ct =>
         {
-            await ExecuteWriteBatchAsync(db, simpleMessages).ConfigureAwait(false);
-        }
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
 
-        if (collapseMessages.Count > 0)
-        {
-            await ExecuteWriteBatchCollapseAsync(db, collapseMessages).ConfigureAwait(false);
-        }
+            if (simpleMessages.Count > 0)
+            {
+                await ExecuteWriteBatchAsync(db, simpleMessages).ConfigureAwait(false);
+            }
+
+            if (collapseMessages.Count > 0)
+            {
+                await ExecuteWriteBatchCollapseAsync(db, collapseMessages).ConfigureAwait(false);
+            }
+        }, token);
     }
 
     private async Task ExecuteWriteBatchAsync(IDatabase db, List<InboxMessage> messages)
@@ -280,37 +297,40 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         var hasWork = toComplete.Count > 0 || toFail.Count > 0 || toRelease.Count > 0 || toDeadLetter.Count > 0;
         if (!hasWork) return;
 
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
-        var tasks = new List<Task>(4);
-        var batch = db.CreateBatch();
-
-        if (toComplete.Count > 0)
+        await RetryExecutor.ExecuteAsync(async ct =>
         {
-            var argv = BuildCompleteArgv(toComplete);
-            tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessComplete, Array.Empty<RedisKey>(), argv));
-        }
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
+            var tasks = new List<Task>(4);
+            var batch = db.CreateBatch();
 
-        if (toFail.Count > 0)
-        {
-            var argv = BuildFailArgv(toFail);
-            tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessFail, Array.Empty<RedisKey>(), argv));
-        }
+            if (toComplete.Count > 0)
+            {
+                var argv = BuildCompleteArgv(toComplete);
+                tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessComplete, Array.Empty<RedisKey>(), argv));
+            }
 
-        if (toRelease.Count > 0)
-        {
-            var argv = BuildReleaseArgv(toRelease);
-            tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessRelease, Array.Empty<RedisKey>(), argv));
-        }
+            if (toFail.Count > 0)
+            {
+                var argv = BuildFailArgv(toFail);
+                tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessFail, Array.Empty<RedisKey>(), argv));
+            }
 
-        if (toDeadLetter.Count > 0)
-        {
-            var movedAt = Configuration.DateTimeProvider.GetUtcNow();
-            var argv = BuildDeadLetterArgv(toDeadLetter, movedAt);
-            tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessDeadLetter, Array.Empty<RedisKey>(), argv));
-        }
+            if (toRelease.Count > 0)
+            {
+                var argv = BuildReleaseArgv(toRelease);
+                tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessRelease, Array.Empty<RedisKey>(), argv));
+            }
 
-        batch.Execute();
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+            if (toDeadLetter.Count > 0)
+            {
+                var movedAt = Configuration.DateTimeProvider.GetUtcNow();
+                var argv = BuildDeadLetterArgv(toDeadLetter, movedAt);
+                tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessDeadLetter, Array.Empty<RedisKey>(), argv));
+            }
+
+            batch.Execute();
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }, token);
     }
 
     public async Task<IReadOnlyList<DeadLetterMessage>> ReadDeadLettersAsync(int count, CancellationToken token)
@@ -320,39 +340,42 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
             return [];
         }
 
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
-        var ids = await db.SortedSetRangeByRankAsync(Keys.DeadLetterKey, 0, count - 1).ConfigureAwait(false);
-
-        if (ids.Length == 0)
+        return await RetryExecutor.ExecuteAsync<IReadOnlyList<DeadLetterMessage>>(async ct =>
         {
-            return [];
-        }
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
+            var ids = await db.SortedSetRangeByRankAsync(Keys.DeadLetterKey, 0, count - 1).ConfigureAwait(false);
 
-        var batch = db.CreateBatch();
-        var hashTasks = ids
-            .Select(idValue => batch.HashGetAllAsync(Keys.DeadLetterMessageKey(idValue.ToString())))
-            .ToArray();
-        batch.Execute();
-
-        var results = await Task.WhenAll(hashTasks).ConfigureAwait(false);
-
-        var messages = new List<DeadLetterMessage>(results.Length);
-        foreach (var hash in results)
-        {
-            if (hash.Length == 0)
+            if (ids.Length == 0)
             {
-                continue;
+                return [];
             }
 
-            var message = ParseDeadLetterHashData(hash);
+            var batch = db.CreateBatch();
+            var hashTasks = ids
+                .Select(idValue => batch.HashGetAllAsync(Keys.DeadLetterMessageKey(idValue.ToString())))
+                .ToArray();
+            batch.Execute();
 
-            if (message != null)
+            var results = await Task.WhenAll(hashTasks).ConfigureAwait(false);
+
+            var messages = new List<DeadLetterMessage>(results.Length);
+            foreach (var hash in results)
             {
-                messages.Add(message);
-            }
-        }
+                if (hash.Length == 0)
+                {
+                    continue;
+                }
 
-        return messages;
+                var message = ParseDeadLetterHashData(hash);
+
+                if (message != null)
+                {
+                    messages.Add(message);
+                }
+            }
+
+            return messages;
+        }, token);
     }
 
     /// <summary>
@@ -371,10 +394,13 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
             return 0;
         }
 
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
-        var argv = BuildExtendMessageLocksArgv(processorId, capturedMessages, newCapturedAt);
-        var result = await db.ScriptEvaluateAsync(RedisScripts.ExtendMessageLocks, Array.Empty<RedisKey>(), argv).ConfigureAwait(false);
-        return (int)result;
+        return await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
+            var argv = BuildExtendMessageLocksArgv(processorId, capturedMessages, newCapturedAt);
+            var result = await db.ScriptEvaluateAsync(RedisScripts.ExtendMessageLocks, Array.Empty<RedisKey>(), argv).ConfigureAwait(false);
+            return (int)result;
+        }, token);
     }
 
     protected RedisValue[] BuildExtendMessageLocksArgv(
@@ -498,44 +524,47 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
     public async Task<InboxHealthMetrics> GetHealthMetricsAsync(CancellationToken token)
     {
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
-
-        var now = Configuration.DateTimeProvider.GetUtcNow();
-        var expiredCaptureThreshold = now - Configuration.Options.MaxProcessingTime;
-
-        var parameters = new
+        return await RetryExecutor.ExecuteAsync(async ct =>
         {
-            pendingKey = (RedisKey)Keys.PendingKey,
-            capturedKey = (RedisKey)Keys.CapturedKey,
-            dlqKey = (RedisKey)Keys.DeadLetterKey,
-            expiredCaptureThreshold = ToUnixMilliseconds(expiredCaptureThreshold).ToString(System.Globalization.CultureInfo.InvariantCulture),
-            enableDeadLetter = EnableDeadLetterFlag
-        };
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
 
-        var result = await db.ScriptEvaluateAsync(RedisScripts.GetHealthMetrics, parameters).ConfigureAwait(false);
-        var array = (RedisResult[]?)result;
+            var now = Configuration.DateTimeProvider.GetUtcNow();
+            var expiredCaptureThreshold = now - Configuration.Options.MaxProcessingTime;
 
-        if (array == null || array.Length < 4)
-        {
-            return new InboxHealthMetrics(0, 0, 0, null);
-        }
+            var parameters = new
+            {
+                pendingKey = (RedisKey)Keys.PendingKey,
+                capturedKey = (RedisKey)Keys.CapturedKey,
+                dlqKey = (RedisKey)Keys.DeadLetterKey,
+                expiredCaptureThreshold = ToUnixMilliseconds(expiredCaptureThreshold).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                enableDeadLetter = EnableDeadLetterFlag
+            };
 
-        var actualPending = (long)array[0];
-        var capturedCount = (long)array[1];
-        var deadLetterCount = (long)array[2];
-        DateTime? oldestPendingAt = null;
+            var result = await db.ScriptEvaluateAsync(RedisScripts.GetHealthMetrics, parameters).ConfigureAwait(false);
+            var array = (RedisResult[]?)result;
 
-        if (!array[3].IsNull)
-        {
-            var oldestScore = (long)array[3];
-            oldestPendingAt = FromUnixMilliseconds(oldestScore);
-        }
+            if (array == null || array.Length < 4)
+            {
+                return new InboxHealthMetrics(0, 0, 0, null);
+            }
 
-        return new InboxHealthMetrics(
-            actualPending,
-            capturedCount,
-            deadLetterCount,
-            oldestPendingAt);
+            var actualPending = (long)array[0];
+            var capturedCount = (long)array[1];
+            var deadLetterCount = (long)array[2];
+            DateTime? oldestPendingAt = null;
+
+            if (!array[3].IsNull)
+            {
+                var oldestScore = (long)array[3];
+                oldestPendingAt = FromUnixMilliseconds(oldestScore);
+            }
+
+            return new InboxHealthMetrics(
+                actualPending,
+                capturedCount,
+                deadLetterCount,
+                oldestPendingAt);
+        }, token);
     }
 
     #endregion

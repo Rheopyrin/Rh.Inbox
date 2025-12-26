@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Rh.Inbox.Abstractions;
 using Rh.Inbox.Abstractions.Configuration;
@@ -497,7 +498,7 @@ public class RedisFifoProviderDirectTests : IAsyncLifetime
     {
         var config = CreateConfiguration();
         var optionsAccessor = CreateMockOptionsAccessor();
-        return new RedisFifoInboxStorageProvider(optionsAccessor, config);
+        return new RedisFifoInboxStorageProvider(optionsAccessor, config, NullLogger<RedisFifoInboxStorageProvider>.Instance);
     }
 
     private async Task InsertTestMessageAsync(

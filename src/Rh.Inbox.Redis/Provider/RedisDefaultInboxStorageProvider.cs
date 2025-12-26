@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Rh.Inbox.Abstractions.Configuration;
 using Rh.Inbox.Abstractions.Messages;
 using Rh.Inbox.Redis.Options;
@@ -12,18 +13,24 @@ namespace Rh.Inbox.Redis.Provider;
 /// </summary>
 internal sealed class RedisDefaultInboxStorageProvider : RedisInboxStorageProviderBase
 {
-    public RedisDefaultInboxStorageProvider(IProviderOptionsAccessor optionsAccessor, IInboxConfiguration configuration)
-        : base(optionsAccessor, configuration)
+    public RedisDefaultInboxStorageProvider(
+        IProviderOptionsAccessor optionsAccessor,
+        IInboxConfiguration configuration,
+        ILogger<RedisDefaultInboxStorageProvider> logger)
+        : base(optionsAccessor, configuration, logger)
     {
     }
 
     public override async Task<IReadOnlyList<InboxMessage>> ReadAndCaptureAsync(string processorId, CancellationToken token)
     {
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
+        return await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
 
-        var result = await db.ScriptEvaluateAsync(RedisScripts.ReadDefault, CreateReadParameters(processorId)).ConfigureAwait(false);
+            var result = await db.ScriptEvaluateAsync(RedisScripts.ReadDefault, CreateReadParameters(processorId)).ConfigureAwait(false);
 
-        return ParseReadResult(result);
+            return ParseReadResult(result);
+        }, token);
     }
 
     private object CreateReadParameters(string processorId)

@@ -1,4 +1,5 @@
 using Npgsql;
+using Rh.Inbox.Resilience;
 
 namespace Rh.Inbox.Postgres.Options;
 
@@ -16,4 +17,10 @@ internal sealed class PostgresInboxProviderOptions
     public required string DeduplicationTableName { get; init; }
 
     public required string GroupLocksTableName { get; init; }
+
+    /// <summary>
+    /// Gets or sets the retry options for transient storage failures.
+    /// Default enables 3 retries with exponential backoff.
+    /// </summary>
+    public RetryOptions Retry { get; init; } = RetryOptions.Default;
 }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Rh.Inbox.Abstractions.Configuration;
 using Rh.Inbox.Abstractions.Messages;
 using Rh.Inbox.Abstractions.Storage;
@@ -30,18 +31,24 @@ namespace Rh.Inbox.Redis.Provider;
 /// </remarks>
 internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderBase, ISupportGroupLocksReleaseStorageProvider
 {
-    public RedisFifoInboxStorageProvider(IProviderOptionsAccessor optionsAccessor, IInboxConfiguration configuration)
-        : base(optionsAccessor, configuration)
+    public RedisFifoInboxStorageProvider(
+        IProviderOptionsAccessor optionsAccessor,
+        IInboxConfiguration configuration,
+        ILogger<RedisFifoInboxStorageProvider> logger)
+        : base(optionsAccessor, configuration, logger)
     {
     }
 
     public override async Task<IReadOnlyList<InboxMessage>> ReadAndCaptureAsync(string processorId, CancellationToken token)
     {
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
+        return await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
 
-        var result = await db.ScriptEvaluateAsync(RedisScripts.ReadFifo, CreateReadParameters(processorId)).ConfigureAwait(false);
+            var result = await db.ScriptEvaluateAsync(RedisScripts.ReadFifo, CreateReadParameters(processorId)).ConfigureAwait(false);
 
-        return ParseReadResult(result);
+            return ParseReadResult(result);
+        }, token);
     }
 
     /// <summary>
@@ -53,8 +60,11 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
     {
         if (groupIds.Count == 0) return;
 
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
-        await ExecuteReleaseGroupLocksAsync(db, groupIds).ConfigureAwait(false);
+        await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
+            await ExecuteReleaseGroupLocksAsync(db, groupIds).ConfigureAwait(false);
+        }, token);
     }
 
     /// <summary>
@@ -81,8 +91,6 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
 
         var hasGroups = groupIdSet.Count > 0;
 
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
-
         if (!hasGroups)
         {
             await ReleaseBatchAsync(messageIds, token).ConfigureAwait(false);
@@ -92,17 +100,22 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         var groupIds = new string[groupIdSet.Count];
         groupIdSet.CopyTo(groupIds);
 
-        var batch = db.CreateBatch();
-        var tasks = new List<Task>(2);
+        await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
 
-        var releaseArgv = BuildReleaseArgv(messageIds);
-        tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessRelease, Array.Empty<RedisKey>(), releaseArgv));
+            var batch = db.CreateBatch();
+            var tasks = new List<Task>(2);
 
-        var groupLocksArgv = BuildReleaseGroupLocksArgv(groupIds);
-        tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ReleaseGroupLocks, Array.Empty<RedisKey>(), groupLocksArgv));
+            var releaseArgv = BuildReleaseArgv(messageIds);
+            tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessRelease, Array.Empty<RedisKey>(), releaseArgv));
 
-        batch.Execute();
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+            var groupLocksArgv = BuildReleaseGroupLocksArgv(groupIds);
+            tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ReleaseGroupLocks, Array.Empty<RedisKey>(), groupLocksArgv));
+
+            batch.Execute();
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }, token);
     }
 
     /// <summary>
@@ -130,31 +143,38 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
 
         var hasGroups = groupIdSet.Count > 0;
 
-        var db = await GetDatabaseAsync(token).ConfigureAwait(false);
-
         if (!hasGroups)
         {
-            var argv = BuildExtendMessageLocksArgv(processorId, capturedMessages, newCapturedAt);
-            var result = await db.ScriptEvaluateAsync(RedisScripts.ExtendMessageLocks, Array.Empty<RedisKey>(), argv).ConfigureAwait(false);
-            return (int)result;
+            return await RetryExecutor.ExecuteAsync(async ct =>
+            {
+                var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
+                var argv = BuildExtendMessageLocksArgv(processorId, capturedMessages, newCapturedAt);
+                var result = await db.ScriptEvaluateAsync(RedisScripts.ExtendMessageLocks, Array.Empty<RedisKey>(), argv).ConfigureAwait(false);
+                return (int)result;
+            }, token);
         }
 
         var groupIds = new string[groupIdSet.Count];
         groupIdSet.CopyTo(groupIds);
 
-        var batch = db.CreateBatch();
-        var tasks = new List<Task<RedisResult>>(2);
+        return await RetryExecutor.ExecuteAsync(async ct =>
+        {
+            var db = await GetDatabaseAsync(ct).ConfigureAwait(false);
 
-        var msgArgv = BuildExtendMessageLocksArgv(processorId, capturedMessages, newCapturedAt);
-        tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ExtendMessageLocks, Array.Empty<RedisKey>(), msgArgv));
+            var batch = db.CreateBatch();
+            var tasks = new List<Task<RedisResult>>(2);
 
-        var groupArgv = BuildExtendGroupLocksArgv(processorId, groupIds);
-        tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ExtendGroupLocks, Array.Empty<RedisKey>(), groupArgv));
+            var msgArgv = BuildExtendMessageLocksArgv(processorId, capturedMessages, newCapturedAt);
+            tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ExtendMessageLocks, Array.Empty<RedisKey>(), msgArgv));
 
-        batch.Execute();
-        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+            var groupArgv = BuildExtendGroupLocksArgv(processorId, groupIds);
+            tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ExtendGroupLocks, Array.Empty<RedisKey>(), groupArgv));
 
-        return (int)results[0];
+            batch.Execute();
+            var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+            return (int)results[0];
+        }, token);
     }
 
     private RedisValue[] BuildExtendGroupLocksArgv(string processorId, string[] groupIds)

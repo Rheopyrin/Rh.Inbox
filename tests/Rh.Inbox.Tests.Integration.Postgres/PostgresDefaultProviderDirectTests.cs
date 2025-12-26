@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using NSubstitute;
 using Rh.Inbox.Abstractions;
@@ -878,7 +879,7 @@ public class PostgresDefaultProviderDirectTests : IAsyncLifetime
         await CleanupTablesAsync();
         var config = CreateConfiguration(enableDeadLetter, enableDeduplication, batchSize);
         var optionsAccessor = CreateMockOptionsAccessor();
-        var provider = new PostgresDefaultInboxStorageProvider(config, optionsAccessor);
+        var provider = new PostgresDefaultInboxStorageProvider(config, optionsAccessor, NullLogger<PostgresDefaultInboxStorageProvider>.Instance);
         await provider.MigrateAsync(CancellationToken.None);
         return provider;
     }

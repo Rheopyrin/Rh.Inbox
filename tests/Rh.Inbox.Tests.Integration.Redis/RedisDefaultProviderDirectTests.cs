@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Rh.Inbox.Abstractions;
 using Rh.Inbox.Abstractions.Configuration;
@@ -902,7 +903,7 @@ public class RedisDefaultProviderDirectTests : IAsyncLifetime
 
         var config = CreateConfiguration(batchSize, enableDeadLetter, enableDeduplication);
         var optionsAccessor = CreateMockOptionsAccessor();
-        var provider = new RedisDefaultInboxStorageProvider(optionsAccessor, config);
+        var provider = new RedisDefaultInboxStorageProvider(optionsAccessor, config, NullLogger<RedisDefaultInboxStorageProvider>.Instance);
         // Redis doesn't need migration like Postgres
         return provider;
     }

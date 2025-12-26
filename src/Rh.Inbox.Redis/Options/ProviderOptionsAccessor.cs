@@ -29,7 +29,8 @@ internal sealed class ProviderOptionsAccessor : IProviderOptionsAccessor
             ConnectionProvider = _connectionProvider,
             ConnectionString = options.ConnectionString,
             KeyPrefix = options.KeyPrefix ?? RedisKeyHelper.BuildKeyPrefix(RedisInboxOptions.DefaultKeyPrefix, inboxName),
-            MaxMessageLifetime = options.MaxMessageLifetime
+            MaxMessageLifetime = options.MaxMessageLifetime,
+            Retry = options.Retry
         };
     }
 }

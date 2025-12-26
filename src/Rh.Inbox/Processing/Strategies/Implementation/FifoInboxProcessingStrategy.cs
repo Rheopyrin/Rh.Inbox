@@ -79,10 +79,9 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
         IInboxMessagePayloadSerializer serializer,
         CancellationToken token) where TMessage : class, IHasGroupId
     {
-        var payload = serializer.Deserialize<TMessage>(message.Payload);
-        if (payload == null)
+        if (!TryDeserializePayload<TMessage>(serializer, message.Payload, message.Id, out var payload, out var errorReason))
         {
-            await context.MoveToDeadLetterAsync(message, "Failed to deserialize message payload", token);
+            await context.MoveToDeadLetterAsync(message, errorReason!, token);
             return;
         }
 
@@ -98,7 +97,7 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
 
         try
         {
-            var envelope = new InboxMessageEnvelope<TMessage>(message.Id, payload);
+            var envelope = new InboxMessageEnvelope<TMessage>(message.Id, payload!);
             InboxHandleResult result = default;
 
             var completed = await ExecuteWithTimeoutAsync(
