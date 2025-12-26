@@ -32,10 +32,8 @@ internal static partial class PostgresIdentifierHelper
 
     internal static string SanitizeIdentifier(string name)
     {
-        // Convert to lowercase and replace invalid characters with underscore
         var sanitized = InvalidIdentifierCharsPattern().Replace(name.ToLowerInvariant(), "_");
 
-        // Ensure it starts with a letter or underscore
         if (sanitized.Length > 0 && char.IsDigit(sanitized[0]))
         {
             sanitized = "_" + sanitized;

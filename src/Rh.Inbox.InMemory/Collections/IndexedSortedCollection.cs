@@ -103,7 +103,6 @@ internal sealed class IndexedSortedCollection<TKey, TItem, TSortKey> : IEnumerab
             var sortCompare = _sortKeyComparer.Compare(_sortKeySelector(x.Item), _sortKeySelector(y.Item));
             if (sortCompare != 0) return sortCompare;
 
-            // Tie-breaker using insertion order to preserve FIFO when sort keys are equal
             return x.InsertionOrder.CompareTo(y.InsertionOrder);
         }
     }

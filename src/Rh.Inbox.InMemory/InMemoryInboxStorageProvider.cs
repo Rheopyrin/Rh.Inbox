@@ -32,7 +32,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
         await _lock.WaitAsync(token);
         try
         {
-            // Check deduplication if enabled
             if (IsDeduplicationEnabled && !string.IsNullOrEmpty(message.DeduplicationId))
             {
                 var now = _configuration.DateTimeProvider.GetUtcNow();
@@ -40,7 +39,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
 
                 if (_inMemoryOptions.DeduplicationStore!.Exists(message.DeduplicationId, expirationTime))
                 {
-                    // Duplicate detected, skip insertion
                     return;
                 }
 
@@ -62,10 +60,15 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
 
     private void RemoveMessagesWithCollapseKey(string collapseKey)
     {
-        var messagesToRemove = _messages
-            .Where(m => m.CollapseKey == collapseKey && m.CapturedAt == null)
-            .Select(m => m.Id)
-            .ToList();
+        var messagesToRemove = new List<Guid>();
+
+        foreach (var message in _messages)
+        {
+            if (message.CollapseKey == collapseKey && message.CapturedAt == null)
+            {
+                messagesToRemove.Add(message.Id);
+            }
+        }
 
         foreach (var id in messagesToRemove)
         {
@@ -78,9 +81,8 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
         await _lock.WaitAsync(token);
         try
         {
-            var messageList = messages.ToList();
+            var messageList = messages as List<InboxMessage> ?? messages.ToList();
 
-            // Filter duplicates if deduplication is enabled
             if (IsDeduplicationEnabled)
             {
                 messageList = FilterDuplicates(messageList);
@@ -106,29 +108,41 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
     {
         var now = _configuration.DateTimeProvider.GetUtcNow();
         var expirationTime = now - _configuration.Options.DeduplicationInterval;
+        var deduplicationIds = new HashSet<string>();
 
-        var deduplicationIds = messages
-            .Where(m => !string.IsNullOrEmpty(m.DeduplicationId))
-            .Select(m => m.DeduplicationId!)
-            .Distinct()
-            .ToArray();
+        foreach (var message in messages)
+        {
+            if (!string.IsNullOrEmpty(message.DeduplicationId))
+            {
+                deduplicationIds.Add(message.DeduplicationId);
+            }
+        }
 
-        if (deduplicationIds.Length == 0)
+        if (deduplicationIds.Count == 0)
         {
             return messages;
         }
 
         var existingIds = _inMemoryOptions.DeduplicationStore!.GetExisting(deduplicationIds, expirationTime);
-        var newIds = deduplicationIds.Except(existingIds).ToHashSet();
+
+        deduplicationIds.ExceptWith(existingIds);
+        var newIds = deduplicationIds;
 
         if (newIds.Count > 0)
         {
             _inMemoryOptions.DeduplicationStore.AddOrUpdateBatch(newIds, now);
         }
 
-        return messages
-            .Where(m => string.IsNullOrEmpty(m.DeduplicationId) || newIds.Contains(m.DeduplicationId))
-            .ToList();
+        var result = new List<InboxMessage>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (string.IsNullOrEmpty(message.DeduplicationId) || newIds.Contains(message.DeduplicationId))
+            {
+                result.Add(message);
+            }
+        }
+
+        return result;
     }
 
     public async Task<IReadOnlyList<InboxMessage>> ReadAndCaptureAsync(string processorId, CancellationToken token)
@@ -167,7 +181,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
             }
         }
 
-        // Clean up expired locks
         foreach (var groupId in expiredGroups)
         {
             _lockedGroups.Remove(groupId);
@@ -235,14 +248,15 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
         if (!isFifo || string.IsNullOrEmpty(message.GroupId))
             return true;
 
-        // Group is locked by another worker - can't capture
         if (lockedGroups!.Contains(message.GroupId))
+        {
             return false;
+        }
 
-        // Group is being captured in this batch - allow multiple messages from same group
-        // (this matches Redis/Postgres behavior)
         if (groupsBeingCaptured.Contains(message.GroupId))
+        {
             return true;
+        }
 
         groupsBeingCaptured.Add(message.GroupId);
         return true;
@@ -275,8 +289,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
         try
         {
             _messages.TryRemove(messageId, out _);
-            // Note: Group lock is NOT released here - it's released via ReleaseGroupLocksAsync
-            // or expires via TTL (matches Redis/Postgres behavior)
         }
         finally
         {
@@ -295,7 +307,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
             {
                 _messages.TryRemove(messageId, out _);
             }
-            // Note: Group locks are NOT released here - released via ReleaseGroupLocksAsync
         }
         finally
         {
@@ -314,7 +325,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
                 message.CapturedAt = null;
                 message.CapturedBy = null;
             }
-            // Note: Group lock is NOT released here - released via ReleaseGroupLocksAsync
         }
         finally
         {
@@ -338,7 +348,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
                     message.CapturedBy = null;
                 }
             }
-            // Note: Group locks are NOT released here - released via ReleaseGroupLocksAsync
         }
         finally
         {
@@ -381,8 +390,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
     {
         if (_messages.TryRemove(messageId, out var message))
         {
-            // Note: Group lock is NOT released here - released via ReleaseGroupLocksAsync
-
             if (_configuration.Options.EnableDeadLetter)
             {
                 var deadLetter = new DeadLetterMessage
@@ -413,7 +420,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
                 message.CapturedAt = null;
                 message.CapturedBy = null;
             }
-            // Note: Group lock is NOT released here - released via ReleaseGroupLocksAsync
         }
         finally
         {
@@ -436,7 +442,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
                     message.CapturedBy = null;
                 }
             }
-            // Note: Group locks are NOT released here - released via ReleaseGroupLocksAsync
         }
         finally
         {
@@ -485,8 +490,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
             {
                 MoveToDeadLetterInternal(messageId, reason);
             }
-
-            // Note: Group locks are NOT released here - released via ReleaseGroupLocksAsync
         }
         finally
         {
@@ -499,7 +502,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
         await _lock.WaitAsync(token);
         try
         {
-            // Already sorted by MovedAt - no OrderBy needed!
             return _inMemoryOptions.DeadLetterStore.Read(count);
         }
         finally
@@ -570,11 +572,9 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
                     message.CapturedBy == processorId &&
                     message.CapturedAt != null)
                 {
-                    // Extend message lock
                     message.CapturedAt = newCapturedAt;
                     extended++;
 
-                    // Extend group lock if applicable
                     if (!string.IsNullOrEmpty(message.GroupId) && _lockedGroups.ContainsKey(message.GroupId))
                     {
                         _lockedGroups[message.GroupId] = newCapturedAt;
@@ -614,28 +614,26 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
     {
         if (messages.Count == 0) return;
 
-        var messageIds = messages.Select(m => m.Id).ToList();
-        var groupIds = messages
-            .Where(m => !string.IsNullOrEmpty(m.GroupId))
-            .Select(m => m.GroupId!)
-            .Distinct()
-            .ToList();
-
         await _lock.WaitAsync(token);
         try
         {
-            // Release messages
-            foreach (var messageId in messageIds)
+            var releasedGroupIds = new HashSet<string>();
+
+            foreach (var msg in messages)
             {
-                if (_messages.TryGetValue(messageId, out var message))
+                if (_messages.TryGetValue(msg.Id, out var message))
                 {
                     message.CapturedAt = null;
                     message.CapturedBy = null;
                 }
+
+                if (!string.IsNullOrEmpty(msg.GroupId))
+                {
+                    releasedGroupIds.Add(msg.GroupId);
+                }
             }
 
-            // Release group locks
-            foreach (var groupId in groupIds)
+            foreach (var groupId in releasedGroupIds)
             {
                 _lockedGroups.Remove(groupId);
             }
@@ -650,7 +648,6 @@ internal sealed class InMemoryInboxStorageProvider : IInboxStorageProvider, ISup
 
     public void Dispose()
     {
-        // Cleanup service is now managed by IInboxLifecycleHook
         _lock.Dispose();
         GC.SuppressFinalize(this);
     }

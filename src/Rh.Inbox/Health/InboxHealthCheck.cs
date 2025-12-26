@@ -61,7 +61,6 @@ internal sealed class InboxHealthCheck : IHealthCheck
             data["oldestPendingAt"] = metrics.OldestPendingMessageAt.Value;
         }
 
-        // Check critical thresholds first
         if (queueDepth >= _options.QueueDepthCriticalThreshold)
         {
             return HealthCheckResult.Unhealthy(
@@ -83,7 +82,6 @@ internal sealed class InboxHealthCheck : IHealthCheck
                 data: data);
         }
 
-        // Check warning thresholds
         if (queueDepth >= _options.QueueDepthWarningThreshold)
         {
             return HealthCheckResult.Degraded(

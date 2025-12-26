@@ -43,7 +43,7 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
         // Group by GroupId ONLY - strict FIFO per group
         var messagesByGroup = messages
             .GroupBy(m => m.GroupId ?? string.Empty)
-            .ToList();
+            .ToArray();
 
         // Process groups in parallel
         await ProcessInParallelAsync(messagesByGroup, async (group, ct) =>
@@ -65,7 +65,7 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
                         Logger.LogWarning("Unknown message type: {MessageType}", messageTypeName);
                         var reason = $"Unknown message type: {messageTypeName}";
                         await context.MoveToDeadLetterBatchAsync(
-                            typeBatch.Select(m => (m, reason)).ToList(), ct);
+                            typeBatch.Select(m => (m, reason)).ToArray(), ct);
                         continue;
                     }
 
@@ -127,13 +127,13 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
             Logger.LogWarning("No FIFO batched handler registered for message type: {MessageType}", typeof(TMessage).FullName);
             var reason = $"No FIFO batched handler registered for message type: {typeof(TMessage).FullName}";
             await context.MoveToDeadLetterBatchAsync(
-                messages.Select(m => (m, reason)).ToList(), token);
+                messages.Select(m => (m, reason)).ToArray(), token);
             return;
         }
 
-        var envelopes = new List<InboxMessageEnvelope<TMessage>>();
-        var successfulMessages = new List<InboxMessage>();
-        var deserializationFailures = new List<InboxMessage>();
+        var envelopes = new List<InboxMessageEnvelope<TMessage>>(messages.Count);
+        var successfulMessages = new List<InboxMessage>(messages.Count);
+        var deserializationFailures = new List<InboxMessage>(messages.Count);
 
         foreach (var msg in messages)
         {
@@ -151,7 +151,7 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
         if (deserializationFailures.Count > 0)
         {
             await context.MoveToDeadLetterBatchAsync(
-                deserializationFailures.Select(m => (m, "Failed to deserialize message payload")).ToList(), token);
+                deserializationFailures.Select(m => (m, "Failed to deserialize message payload")).ToArray(), token);
         }
 
         if (envelopes.Count == 0)
@@ -168,7 +168,6 @@ internal sealed class FifoBatchedInboxProcessingStrategy : InboxProcessingStrate
                 $"FIFO batch of {envelopes.Count} messages for group '{groupId}' of type {typeof(TMessage).FullName}",
                 token);
 
-            // On timeout, create Failed results for all messages in the batch
             if (!completed)
             {
                 results = envelopes.Select(e => new InboxMessageResult(e.Id, InboxHandleResult.Failed)).ToArray();

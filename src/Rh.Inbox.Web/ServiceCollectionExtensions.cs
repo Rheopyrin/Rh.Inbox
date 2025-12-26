@@ -20,10 +20,7 @@ public static class ServiceCollectionExtensions
     /// </remarks>
     public static IServiceCollection RunInboxAsHostedService(this IServiceCollection services)
     {
-        // Remove the default lifecycle if registered
         services.RemoveAll<IInboxLifecycle>();
-
-        // Add the hosted lifecycle and hosted service
         services.TryAddSingleton<IInboxLifecycle, InboxHostedLifecycle>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, InboxHostedService>());
 

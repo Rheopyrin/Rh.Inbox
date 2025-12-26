@@ -53,7 +53,6 @@ public static class RedisInboxBuilderExtensions
             errors.Add(new InboxOptionError(nameof(options.ConnectionString), "Connection string is required."));
         }
 
-        // Only validate key prefix if explicitly set (null means auto-generate)
         if (options.KeyPrefix is not null && !RedisKeyHelper.IsValidKeyPrefix(options.KeyPrefix))
         {
             errors.Add(new InboxOptionError(nameof(options.KeyPrefix),

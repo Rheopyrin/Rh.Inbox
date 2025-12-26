@@ -69,9 +69,19 @@ internal sealed class RedisIdentifiers
     public string MessageKey(Guid id) => $"{MsgKeyBase}{id}";
 
     /// <summary>
+    /// Gets the message hash key for a specific message ID (string overload to avoid redundant Guid.ToString()).
+    /// </summary>
+    public string MessageKey(string id) => $"{MsgKeyBase}{id}";
+
+    /// <summary>
     /// Gets the dead letter message hash key for a specific message ID.
     /// </summary>
     public string DeadLetterMessageKey(Guid id) => $"{DlqKeyBase}{id}";
+
+    /// <summary>
+    /// Gets the dead letter message hash key for a specific message ID (string overload to avoid redundant Guid.ToString()).
+    /// </summary>
+    public string DeadLetterMessageKey(string id) => $"{DlqKeyBase}{id}";
 
     /// <summary>
     /// Gets the deduplication key for a specific deduplication ID.

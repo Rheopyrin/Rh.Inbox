@@ -79,7 +79,6 @@ internal abstract class InboxProcessingStrategyBase : IInboxProcessingStrategy
 
         if (options.MaxProcessingThreads <= 1)
         {
-            // Sequential processing (current behavior)
             foreach (var item in items)
             {
                 await processItem(item, token);
@@ -87,7 +86,6 @@ internal abstract class InboxProcessingStrategyBase : IInboxProcessingStrategy
         }
         else
         {
-            // Parallel processing with bounded concurrency
             var parallelOptions = new ParallelOptions
             {
                 MaxDegreeOfParallelism = options.MaxProcessingThreads,

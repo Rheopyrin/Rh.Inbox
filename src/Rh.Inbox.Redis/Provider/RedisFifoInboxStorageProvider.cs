@@ -65,14 +65,21 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
     {
         if (messages.Count == 0) return;
 
-        var messageIds = messages.Select(m => m.Id).ToList();
-        var groupIds = messages
-            .Where(m => !string.IsNullOrEmpty(m.GroupId))
-            .Select(m => m.GroupId!)
-            .Distinct()
-            .ToList();
+        var messageIds = new Guid[messages.Count];
+        var groupIdSet = new HashSet<string>();
 
-        var hasGroups = groupIds.Count > 0;
+        for (var i = 0; i < messages.Count; i++)
+        {
+            messageIds[i] = messages[i].Id;
+            var groupId = messages[i].GroupId;
+
+            if (!string.IsNullOrEmpty(groupId))
+            {
+                groupIdSet.Add(groupId);
+            }
+        }
+
+        var hasGroups = groupIdSet.Count > 0;
 
         var db = await GetDatabaseAsync(token).ConfigureAwait(false);
 
@@ -82,15 +89,15 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
             return;
         }
 
-        // Execute both operations in a single batch/pipeline
+        var groupIds = new string[groupIdSet.Count];
+        groupIdSet.CopyTo(groupIds);
+
         var batch = db.CreateBatch();
         var tasks = new List<Task>(2);
 
-        // Release messages
         var releaseArgv = BuildReleaseArgv(messageIds);
         tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ProcessRelease, Array.Empty<RedisKey>(), releaseArgv));
 
-        // Release group locks
         var groupLocksArgv = BuildReleaseGroupLocksArgv(groupIds);
         tasks.Add(batch.ScriptEvaluateAsync(RedisScripts.ReleaseGroupLocks, Array.Empty<RedisKey>(), groupLocksArgv));
 
@@ -112,17 +119,19 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
             return 0;
         }
 
-        var groupIds = capturedMessages
-            .Where(m => !string.IsNullOrEmpty(m.GroupId))
-            .Select(m => m.GroupId!)
-            .Distinct()
-            .ToList();
+        var groupIdSet = new HashSet<string>();
+        foreach (var msg in capturedMessages)
+        {
+            if (!string.IsNullOrEmpty(msg.GroupId))
+            {
+                groupIdSet.Add(msg.GroupId);
+            }
+        }
 
-        var hasGroups = groupIds.Count > 0;
+        var hasGroups = groupIdSet.Count > 0;
 
         var db = await GetDatabaseAsync(token).ConfigureAwait(false);
 
-        // If no groups, just extend message locks
         if (!hasGroups)
         {
             var argv = BuildExtendMessageLocksArgv(processorId, capturedMessages, newCapturedAt);
@@ -130,7 +139,9 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
             return (int)result;
         }
 
-        // Extend both message and group locks in a single batch
+        var groupIds = new string[groupIdSet.Count];
+        groupIdSet.CopyTo(groupIds);
+
         var batch = db.CreateBatch();
         var tasks = new List<Task<RedisResult>>(2);
 
@@ -143,20 +154,18 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         batch.Execute();
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
 
-        // Return count of extended message locks
         return (int)results[0];
     }
 
-    private RedisValue[] BuildExtendGroupLocksArgv(string processorId, List<string> groupIds)
+    private RedisValue[] BuildExtendGroupLocksArgv(string processorId, string[] groupIds)
     {
-        // ARGV: [lockKeyBase, processorId, lockTtlSeconds, ...groupIds]
         var lockTtlSeconds = (long)Configuration.Options.MaxProcessingTime.TotalSeconds;
-        var argv = new RedisValue[3 + groupIds.Count];
+        var argv = new RedisValue[3 + groupIds.Length];
         argv[0] = Keys.LockKeyBase;
         argv[1] = processorId;
         argv[2] = lockTtlSeconds;
 
-        for (var i = 0; i < groupIds.Count; i++)
+        for (var i = 0; i < groupIds.Length; i++)
         {
             argv[3 + i] = groupIds[i];
         }
@@ -170,14 +179,13 @@ internal sealed class RedisFifoInboxStorageProvider : RedisInboxStorageProviderB
         await db.ScriptEvaluateAsync(RedisScripts.ReleaseGroupLocks, Array.Empty<RedisKey>(), argv).ConfigureAwait(false);
     }
 
-    private RedisValue[] BuildReleaseArgv(List<Guid> messageIds)
+    private RedisValue[] BuildReleaseArgv(Guid[] messageIds)
     {
-        // ARGV: [capturedKey, msgKeyBase, ...ids]
-        var argv = new RedisValue[2 + messageIds.Count];
+        var argv = new RedisValue[2 + messageIds.Length];
         argv[0] = Keys.CapturedKey;
         argv[1] = Keys.MsgKeyBase;
 
-        for (var i = 0; i < messageIds.Count; i++)
+        for (var i = 0; i < messageIds.Length; i++)
         {
             argv[2 + i] = messageIds[i].ToString();
         }

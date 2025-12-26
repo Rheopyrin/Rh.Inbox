@@ -36,8 +36,8 @@ internal sealed class MessageProcessingContext : IMessageProcessingContext
         }
     }
 
-    public IReadOnlyList<InboxMessage> GetInFlightMessages()
-        => _inFlightMessages.Values.ToList();
+    public IReadOnlyList<InboxMessage> GetInFlightMessages() =>
+        _inFlightMessages.IsEmpty ? [] : _inFlightMessages.Values.ToArray();
 
     public async Task ProcessResultsBatchAsync(IReadOnlyList<InboxMessageResult> results, CancellationToken token)
     {
@@ -46,15 +46,13 @@ internal sealed class MessageProcessingContext : IMessageProcessingContext
             return;
         }
 
-        // Group results by outcome for batch processing
-        var toComplete = new List<Guid>();
-        var toFail = new List<Guid>();
-        var toRelease = new List<Guid>();
-        var toDeadLetter = new List<(Guid MessageId, string Reason)>();
+        var toComplete = new List<Guid>(results.Count);
+        var toFail = new List<Guid>(results.Count);
+        var toRelease = new List<Guid>(results.Count);
+        var toDeadLetter = new List<(Guid MessageId, string Reason)>(results.Count);
 
         foreach (var result in results)
         {
-            // Remove from in-flight tracking and get message for max attempts check
             _inFlightMessages.TryRemove(result.MessageId, out var message);
 
             switch (result.Result)
@@ -64,7 +62,6 @@ internal sealed class MessageProcessingContext : IMessageProcessingContext
                     break;
 
                 case InboxHandleResult.Failed:
-                    // Check if max attempts exceeded - move to dead letter instead of failing
                     if (message != null && message.AttemptsCount + 1 >= _options.MaxAttempts)
                     {
                         var reason = GetDeadLetterReason(result.FailureReason, isMaxAttemptsExceeded: true);
@@ -90,13 +87,11 @@ internal sealed class MessageProcessingContext : IMessageProcessingContext
             }
         }
 
-        // Execute all operations in a single connection/transaction
         await _storageProvider.ProcessResultsBatchAsync(toComplete, toFail, toRelease, toDeadLetter, token);
     }
 
     public async Task FailMessageAsync(InboxMessage message, CancellationToken token)
     {
-        // Check if max attempts will be exceeded after this failure
         if (message.AttemptsCount + 1 >= _options.MaxAttempts)
         {
             _logger.LogWarning(
@@ -121,8 +116,8 @@ internal sealed class MessageProcessingContext : IMessageProcessingContext
 
         var maxAttemptsReason = GetMaxAttemptsExceededReason();
 
-        var toFail = new List<Guid>();
-        var toDeadLetter = new List<(Guid MessageId, string Reason)>();
+        var toFail = new List<Guid>(messages.Count);
+        var toDeadLetter = new List<(Guid MessageId, string Reason)>(messages.Count);
 
         foreach (var message in messages)
         {
@@ -149,7 +144,6 @@ internal sealed class MessageProcessingContext : IMessageProcessingContext
             await _storageProvider.MoveToDeadLetterBatchAsync(toDeadLetter, token);
         }
 
-        // Remove all from in-flight tracking
         foreach (var message in messages)
         {
             _inFlightMessages.TryRemove(message.Id, out _);
@@ -170,7 +164,7 @@ internal sealed class MessageProcessingContext : IMessageProcessingContext
         }
 
         await _storageProvider.MoveToDeadLetterBatchAsync(
-            messages.Select(m => (m.Message.Id, m.Reason)).ToList(),
+            messages.Select(m => (m.Message.Id, m.Reason)).ToArray(),
             token);
 
         foreach (var (message, _) in messages)

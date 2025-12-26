@@ -11,6 +11,8 @@ namespace Rh.Inbox.Processing;
 
 internal sealed class InboxProcessingLoop : IDisposable
 {
+    private static readonly ActivitySource ActivitySource = new(nameof(InboxProcessingLoop));
+
     private readonly InboxBase _inbox;
     private readonly IInboxProcessingStrategy _strategy;
     private readonly ILogger<InboxProcessingLoop> _logger;
@@ -109,8 +111,7 @@ internal sealed class InboxProcessingLoop : IDisposable
                 if (!await WaitForReadDelayAsync(options.ReadDelay, readStopwatch, token))
                     break;
 
-                var activity = new Activity(nameof(InboxProcessingLoop));
-                activity.Start();
+                using var activity = ActivitySource.StartActivity("ProcessBatch");
 
                 readStopwatch.Restart();
                 var shouldDelay = true;
@@ -126,10 +127,6 @@ internal sealed class InboxProcessingLoop : IDisposable
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error in processing loop for inbox '{InboxName}'", _inbox.Name);
-                }
-                finally
-                {
-                    activity.Stop();
                 }
 
                 if (shouldDelay)
@@ -180,7 +177,7 @@ internal sealed class InboxProcessingLoop : IDisposable
             }
             else
             {
-                var messageIds = messagesToRelease.Select(m => m.Id).ToList();
+                var messageIds = messagesToRelease.Select(m => m.Id).ToArray();
                 await storageProvider.ReleaseBatchAsync(messageIds, timeoutCts.Token);
             }
 
@@ -229,7 +226,6 @@ internal sealed class InboxProcessingLoop : IDisposable
             return 0;
         }
 
-        // Create and store context for lock extension and shutdown
         var context = CreateContext(storageProvider, configuration.Options, messages);
 
         Timer? lockExtensionTimer = null;
@@ -237,14 +233,13 @@ internal sealed class InboxProcessingLoop : IDisposable
 
         try
         {
-            // Setup lock extension timer if enabled
             if (configuration.Options.EnableLockExtension)
             {
                 timerCts = CancellationTokenSource.CreateLinkedTokenSource(token);
                 var interval = TimeSpan.FromTicks(
                     (long)(configuration.Options.MaxProcessingTime.Ticks * configuration.Options.LockExtensionThreshold));
 
-                var localTimerCts = timerCts; // Capture for lambda to avoid warning
+                var localTimerCts = timerCts;
                 lockExtensionTimer = new Timer(
                     _ => OnLockExtensionTimerElapsed(lockExtensionTimer!, storageProvider, configuration, interval, localTimerCts.Token),
                     null,
@@ -308,7 +303,6 @@ internal sealed class InboxProcessingLoop : IDisposable
         }
         finally
         {
-            // Reschedule the timer for the next extension (unless cancelled)
             if (!token.IsCancellationRequested)
             {
                 try
@@ -317,7 +311,6 @@ internal sealed class InboxProcessingLoop : IDisposable
                 }
                 catch (ObjectDisposedException)
                 {
-                    // Timer was disposed during shutdown - ignore
                 }
             }
         }
@@ -333,7 +326,6 @@ internal sealed class InboxProcessingLoop : IDisposable
             return;
         }
 
-        // Get only messages that are still in-flight (not yet processed)
         var messagesToExtend = _currentContext?.GetInFlightMessages();
 
         if (messagesToExtend is not { Count: > 0 })
@@ -346,7 +338,6 @@ internal sealed class InboxProcessingLoop : IDisposable
             var newCapturedAt = configuration.DateTimeProvider.GetUtcNow();
             var extended = await storageProvider.ExtendLocksAsync(_processorId, messagesToExtend, newCapturedAt, token);
 
-            // Update in-memory message objects to reflect the new captured time
             if (extended > 0)
             {
                 foreach (var message in messagesToExtend)
@@ -362,7 +353,6 @@ internal sealed class InboxProcessingLoop : IDisposable
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            // Ignore cancellation
         }
         catch (Exception ex)
         {

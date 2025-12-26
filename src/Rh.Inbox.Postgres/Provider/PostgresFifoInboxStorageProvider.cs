@@ -73,32 +73,44 @@ internal sealed class PostgresFifoInboxStorageProvider : PostgresInboxStoragePro
     /// </summary>
     public async Task ReleaseMessagesAndGroupLocksAsync(IReadOnlyList<IInboxMessageIdentifiers> messages, CancellationToken token)
     {
-        if (messages.Count == 0) return;
+        if (messages.Count == 0)
+        {
+            return;
+        }
 
-        var messageIds = messages.Select(m => m.Id).ToList();
-        var groupIds = messages
-            .Where(m => !string.IsNullOrEmpty(m.GroupId))
-            .Select(m => m.GroupId!)
-            .Distinct()
-            .ToList();
+        var messageIds = new Guid[messages.Count];
+        var groupIdSet = new HashSet<string>();
 
-        var hasGroups = groupIds.Count > 0;
+        for (var i = 0; i < messages.Count; i++)
+        {
+            messageIds[i] = messages[i].Id;
+            var groupId = messages[i].GroupId;
+
+            if (!string.IsNullOrEmpty(groupId))
+            {
+                groupIdSet.Add(groupId);
+            }
+        }
+
+        var hasGroups = groupIdSet.Count > 0;
 
         await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
 
         if (!hasGroups)
         {
             await using var cmd = new NpgsqlCommand(Sql.ReleaseBatch, connection);
-            cmd.Parameters.AddWithValue("ids", AsArray(messageIds));
+            cmd.Parameters.AddWithValue("ids", messageIds);
             await cmd.ExecuteNonQueryAsync(token);
             return;
         }
 
-        // Execute both operations in a single statement
+        var groupIds = new string[groupIdSet.Count];
+        groupIdSet.CopyTo(groupIds);
+
         await using var combinedCmd = new NpgsqlCommand(_fifoSql.ReleaseMessagesAndGroupLocks, connection);
-        combinedCmd.Parameters.AddWithValue("messageIds", AsArray(messageIds));
+        combinedCmd.Parameters.AddWithValue("messageIds", messageIds);
         combinedCmd.Parameters.AddWithValue("inboxName", Configuration.InboxName);
-        combinedCmd.Parameters.AddWithValue("groupIds", AsArray(groupIds));
+        combinedCmd.Parameters.AddWithValue("groupIds", groupIds);
         await combinedCmd.ExecuteNonQueryAsync(token);
     }
 
@@ -116,34 +128,42 @@ internal sealed class PostgresFifoInboxStorageProvider : PostgresInboxStoragePro
             return 0;
         }
 
-        var messageIds = capturedMessages.Select(m => m.Id).ToList();
-        var groupIds = capturedMessages
-            .Where(m => !string.IsNullOrEmpty(m.GroupId))
-            .Select(m => m.GroupId!)
-            .Distinct()
-            .ToList();
+        var messageIds = new Guid[capturedMessages.Count];
+        var groupIdSet = new HashSet<string>();
 
-        var hasGroups = groupIds.Count > 0;
+        for (var i = 0; i < capturedMessages.Count; i++)
+        {
+            messageIds[i] = capturedMessages[i].Id;
+            var groupId = capturedMessages[i].GroupId;
+
+            if (!string.IsNullOrEmpty(groupId))
+            {
+                groupIdSet.Add(groupId);
+            }
+        }
+
+        var hasGroups = groupIdSet.Count > 0;
 
         await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
 
-        // If no groups (non-FIFO use case), just extend message locks
         if (!hasGroups)
         {
             await using var cmd = new NpgsqlCommand(Sql.ExtendMessageLocks, connection);
-            cmd.Parameters.AddWithValue("messageIds", AsArray(messageIds));
+            cmd.Parameters.AddWithValue("messageIds", messageIds);
             cmd.Parameters.AddWithValue("processorId", processorId);
             cmd.Parameters.AddWithValue("newCapturedAt", newCapturedAt);
             return await cmd.ExecuteNonQueryAsync(token);
         }
 
-        // Extend both messages and groups
+        var groupIds = new string[groupIdSet.Count];
+        groupIdSet.CopyTo(groupIds);
+
         await using var combinedCmd = new NpgsqlCommand(_fifoSql.ExtendMessagesAndGroupLocks, connection);
-        combinedCmd.Parameters.AddWithValue("messageIds", AsArray(messageIds));
+        combinedCmd.Parameters.AddWithValue("messageIds", messageIds);
         combinedCmd.Parameters.AddWithValue("processorId", processorId);
         combinedCmd.Parameters.AddWithValue("newCapturedAt", newCapturedAt);
         combinedCmd.Parameters.AddWithValue("inboxName", Configuration.InboxName);
-        combinedCmd.Parameters.AddWithValue("groupIds", AsArray(groupIds));
+        combinedCmd.Parameters.AddWithValue("groupIds", groupIds);
 
         var result = await combinedCmd.ExecuteScalarAsync(token);
         return result != null ? Convert.ToInt32(result, System.Globalization.CultureInfo.InvariantCulture) : 0;

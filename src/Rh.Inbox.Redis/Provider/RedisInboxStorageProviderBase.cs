@@ -51,10 +51,6 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
     protected static long ToUnixMilliseconds(DateTime dateTime)
     {
-        // Convert to UTC using standard .NET behavior:
-        // - Utc: used as-is
-        // - Local: converted to UTC
-        // - Unspecified: treated as Local and converted to UTC (matches DateTime.ToUniversalTime behavior)
         var utc = dateTime.Kind == DateTimeKind.Utc
             ? dateTime
             : dateTime.ToUniversalTime();
@@ -93,8 +89,8 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
         var db = await GetDatabaseAsync(token).ConfigureAwait(false);
 
-        var simpleMessages = new List<InboxMessage>();
-        var collapseMessages = new List<InboxMessage>();
+        var simpleMessages = new List<InboxMessage>(messageList.Count);
+        var collapseMessages = new List<InboxMessage>(messageList.Count);
 
         foreach (var message in messageList)
         {
@@ -209,7 +205,7 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
             pendingKey = (RedisKey)Keys.PendingKey,
             capturedKey = (RedisKey)Keys.CapturedKey,
             collapseKey = (RedisKey)Keys.CollapseKey,
-            messageKey = (RedisKey)Keys.MessageKey(message.Id),
+            messageKey = (RedisKey)Keys.MessageKey(p.Id), // Reuse p.Id to avoid redundant Guid.ToString()
             msgKeyBase = Keys.MsgKeyBase,
             id = p.Id,
             inboxName = p.InboxName,
@@ -334,8 +330,8 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
         var batch = db.CreateBatch();
         var hashTasks = ids
-            .Select(idValue => batch.HashGetAllAsync(Keys.DeadLetterMessageKey(Guid.Parse(idValue.ToString()))))
-            .ToList();
+            .Select(idValue => batch.HashGetAllAsync(Keys.DeadLetterMessageKey(idValue.ToString())))
+            .ToArray();
         batch.Execute();
 
         var results = await Task.WhenAll(hashTasks).ConfigureAwait(false);
@@ -386,7 +382,6 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
         IReadOnlyList<IInboxMessageIdentifiers> capturedMessages,
         DateTime newCapturedAt)
     {
-        // ARGV: [capturedKey, msgKeyBase, processorId, newCapturedAtStr, newCapturedAtScore, ...ids]
         var argv = new RedisValue[5 + capturedMessages.Count];
         argv[0] = Keys.CapturedKey;
         argv[1] = Keys.MsgKeyBase;
@@ -404,7 +399,6 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
     private RedisValue[] BuildCompleteArgv(IReadOnlyList<Guid> messageIds)
     {
-        // ARGV: [pendingKey, capturedKey, collapseKey, msgKeyBase, ...ids]
         var argv = new RedisValue[4 + messageIds.Count];
         argv[0] = Keys.PendingKey;
         argv[1] = Keys.CapturedKey;
@@ -421,7 +415,6 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
     private RedisValue[] BuildFailArgv(IReadOnlyList<Guid> messageIds)
     {
-        // ARGV: [capturedKey, msgKeyBase, ttlSeconds, ...ids]
         var argv = new RedisValue[3 + messageIds.Count];
         argv[0] = Keys.CapturedKey;
         argv[1] = Keys.MsgKeyBase;
@@ -437,7 +430,6 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
     private RedisValue[] BuildReleaseArgv(IReadOnlyList<Guid> messageIds)
     {
-        // ARGV: [capturedKey, msgKeyBase, ...ids]
         var argv = new RedisValue[2 + messageIds.Count];
         argv[0] = Keys.CapturedKey;
         argv[1] = Keys.MsgKeyBase;
@@ -452,8 +444,6 @@ internal abstract class RedisInboxStorageProviderBase : IInboxStorageProvider, I
 
     private RedisValue[] BuildDeadLetterArgv(IReadOnlyList<(Guid MessageId, string Reason)> messages, DateTime movedAt)
     {
-        // ARGV: [pendingKey, capturedKey, collapseKey, dlqKey, msgKeyBase, dlqKeyBase,
-        //        ttlSeconds, enableDlq, movedAt, movedAtScore, ...(id, reason) pairs]
         var argv = new RedisValue[10 + (messages.Count * 2)];
         argv[0] = Keys.PendingKey;
         argv[1] = Keys.CapturedKey;

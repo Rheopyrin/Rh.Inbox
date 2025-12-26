@@ -43,15 +43,15 @@ internal sealed class PostgresCleanupTasksManager : IPostgresCleanupTasksManager
 
     private async Task ExecuteInternalAsync(IEnumerable<ICleanupTask> tasks, CancellationToken token)
     {
-        var taskList = tasks.ToList();
+        var taskList = tasks.ToArray();
 
-        if (taskList.Count == 0)
+        if (taskList.Length == 0)
         {
             _logger.LogDebug("No cleanup tasks to execute");
             return;
         }
 
-        _logger.LogInformation("Executing {Count} cleanup task(s)", taskList.Count);
+        _logger.LogInformation("Executing {Count} cleanup task(s)", taskList.Length);
 
         try
         {
@@ -108,9 +108,9 @@ internal sealed class PostgresCleanupTasksManager : IPostgresCleanupTasksManager
 
     private Task StartInternalAsync(IEnumerable<ICleanupTask> tasks, CancellationToken stoppingToken)
     {
-        var taskList = tasks.ToList();
+        var taskList = tasks.ToArray();
 
-        if (taskList.Count == 0)
+        if (taskList.Length == 0)
         {
             _logger.LogDebug("No cleanup tasks to start");
             return Task.CompletedTask;
@@ -136,16 +136,16 @@ internal sealed class PostgresCleanupTasksManager : IPostgresCleanupTasksManager
 
     public async Task StopAsync(CancellationToken token)
     {
-        var tasksToStop = _runningTasks.Values.ToList();
+        var tasksToStop = _runningTasks.Values.ToArray();
         _runningTasks.Clear();
 
-        if (tasksToStop.Count == 0)
+        if (tasksToStop.Length == 0)
         {
             _logger.LogDebug("No cleanup tasks to stop");
             return;
         }
 
-        _logger.LogInformation("Stopping {Count} cleanup task(s)", tasksToStop.Count);
+        _logger.LogInformation("Stopping {Count} cleanup task(s)", tasksToStop.Length);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeoutCts.CancelAfter(StopTimeout);

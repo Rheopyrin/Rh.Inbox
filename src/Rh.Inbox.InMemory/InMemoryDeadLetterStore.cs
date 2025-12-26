@@ -28,7 +28,7 @@ internal sealed class InMemoryDeadLetterStore : IDisposable
     /// </summary>
     public IReadOnlyList<DeadLetterMessage> Read(int count)
     {
-        return _deadLetters.Take(count).ToList();
+        return _deadLetters.Take(count).ToArray();
     }
 
     /// <summary>
@@ -46,14 +46,14 @@ internal sealed class InMemoryDeadLetterStore : IDisposable
             var expiredIds = _deadLetters
                 .Where(m => m.MovedAt <= expirationTime)
                 .Select(m => m.Id)
-                .ToList();
+                .ToArray();
 
             foreach (var id in expiredIds)
             {
                 _deadLetters.TryRemove(id, out _);
             }
 
-            return expiredIds.Count;
+            return expiredIds.Length;
         }
         finally
         {

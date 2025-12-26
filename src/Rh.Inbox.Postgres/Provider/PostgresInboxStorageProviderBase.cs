@@ -57,7 +57,7 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
 
         await using var connection = await PostgresOptions.DataSource.OpenConnectionAsync(token);
         await using var cmd = new NpgsqlCommand(Sql.ExtendMessageLocks, connection);
-        cmd.Parameters.AddWithValue("messageIds", AsArray(capturedMessages.Select(m => m.Id).ToList()));
+        cmd.Parameters.AddWithValue("messageIds", capturedMessages.Select(m => m.Id).ToArray());
         cmd.Parameters.AddWithValue("processorId", processorId);
         cmd.Parameters.AddWithValue("newCapturedAt", newCapturedAt);
 
@@ -209,8 +209,9 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
         InboxMessage[] batch,
         CancellationToken token)
     {
-        var parameters = new List<NpgsqlParameter>();
-        var valuesClauses = new List<string>();
+        const int parametersPerRow = 9;
+        var parameters = new List<NpgsqlParameter>(batch.Length * parametersPerRow);
+        var valuesClauses = new List<string>(batch.Length);
 
         for (var i = 0; i < batch.Length; i++)
         {
@@ -319,9 +320,10 @@ internal abstract class PostgresInboxStorageProviderBase : ISupportMigration, IS
         IReadOnlyList<(Guid MessageId, string Reason)> messages,
         CancellationToken token)
     {
+        const int parametersPerRow = 2;
         var movedAt = Configuration.DateTimeProvider.GetUtcNow();
-        var parameters = new List<NpgsqlParameter>();
-        var valuesClauses = new List<string>();
+        var parameters = new List<NpgsqlParameter>(messages.Count * parametersPerRow);
+        var valuesClauses = new List<string>(messages.Count);
 
         for (var i = 0; i < messages.Count; i++)
         {

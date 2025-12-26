@@ -39,20 +39,16 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
         var serializer = GetSerializer();
         var groupLocksProvider = storageProvider as ISupportGroupLocksReleaseStorageProvider;
 
-        // Group by GroupId ONLY - strict FIFO per group
         var messagesByGroup = messages
             .GroupBy(m => m.GroupId ?? string.Empty)
-            .ToList();
+            .ToArray();
 
-        // Process groups in parallel
         await ProcessInParallelAsync(messagesByGroup, async (group, ct) =>
         {
             var groupId = group.Key;
 
             try
             {
-                // Sequential processing WITHIN the group - strict FIFO guarantee
-                // Order preserved from storage - no explicit sorting needed
                 foreach (var message in group)
                 {
                     var messageType = configuration.MetadataRegistry.GetClrType(message.MessageType);
@@ -110,7 +106,6 @@ internal sealed class FifoInboxProcessingStrategy : InboxProcessingStrategyBase
                 $"FIFO message {message.Id}",
                 token);
 
-            // Use Failed result on timeout, letting ProcessResultsBatchAsync handle max attempts logic
             var handlerResult = completed ? result : InboxHandleResult.Failed;
             var messageResult = new InboxMessageResult(message.Id, handlerResult);
             await context.ProcessResultsBatchAsync([messageResult], token);

@@ -48,9 +48,9 @@ internal sealed class InboxWriter : IInboxWriter
 
         var options = inbox.GetConfiguration().Options;
         var storageProvider = inbox.GetStorageProvider();
-        var chunks = inboxMessages.Chunk(options.WriteBatchSize).ToList();
+        var chunkCount = (inboxMessages.Count + options.WriteBatchSize - 1) / options.WriteBatchSize;
 
-        if (options.MaxWriteThreads <= 1 || chunks.Count <= 1)
+        if (options.MaxWriteThreads <= 1 || chunkCount <= 1)
         {
             await storageProvider.WriteBatchAsync(inboxMessages, token);
         }
@@ -62,7 +62,7 @@ internal sealed class InboxWriter : IInboxWriter
                 CancellationToken = token
             };
 
-            await Parallel.ForEachAsync(chunks, parallelOptions, async (chunk, ct) =>
+            await Parallel.ForEachAsync(inboxMessages.Chunk(options.WriteBatchSize), parallelOptions, async (chunk, ct) =>
             {
                 await storageProvider.WriteBatchAsync(chunk, ct);
             });

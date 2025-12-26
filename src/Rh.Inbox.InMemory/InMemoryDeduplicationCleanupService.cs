@@ -53,7 +53,6 @@ internal sealed class InMemoryDeduplicationCleanupService : IInboxLifecycleHook
             }
             catch (OperationCanceledException)
             {
-                // Expected when token is cancelled before task completes
             }
         }
     }

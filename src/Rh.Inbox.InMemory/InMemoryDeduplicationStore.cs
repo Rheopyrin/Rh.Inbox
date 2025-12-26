@@ -60,10 +60,15 @@ internal sealed class InMemoryDeduplicationStore
     /// <returns>The number of records removed.</returns>
     public int CleanupExpired(DateTime expirationTime)
     {
-        var keysToRemove = _records
-            .Where(kvp => kvp.Value <= expirationTime)
-            .Select(kvp => kvp.Key)
-            .ToList();
+        var keysToRemove = new List<string>();
+
+        foreach (var kvp in _records)
+        {
+            if (kvp.Value <= expirationTime)
+            {
+                keysToRemove.Add(kvp.Key);
+            }
+        }
 
         var removedCount = 0;
         foreach (var key in keysToRemove)

@@ -66,7 +66,6 @@ internal sealed class GroupLocksCleanupService : ICleanupTask
             }
             catch (OperationCanceledException)
             {
-                // Expected when token is cancelled before task completes
             }
         }
 
@@ -86,7 +85,6 @@ internal sealed class GroupLocksCleanupService : ICleanupTask
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            // Expected during shutdown
         }
         catch (Exception ex)
         {

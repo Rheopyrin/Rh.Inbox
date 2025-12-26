@@ -48,7 +48,6 @@ public static class InMemoryInboxBuilderExtensions
 
         builder.PostConfigure((configuration, collection) =>
         {
-            // Register deduplication cleanup service when deduplication is enabled
             var dedupInterval = configuration.Options.DeduplicationInterval;
             if (configuration.Options.EnableDeduplication && dedupInterval > TimeSpan.Zero)
             {
@@ -56,7 +55,6 @@ public static class InMemoryInboxBuilderExtensions
                     ActivatorUtilities.CreateInstance<InMemoryDeduplicationCleanupService>(sp, configuration, options.DeduplicationCleanup));
             }
 
-            // Register dead letter cleanup service when enabled
             var dlqLifetime = configuration.Options.DeadLetterMaxMessageLifetime;
             if (configuration.Options.EnableDeadLetter && dlqLifetime > TimeSpan.Zero)
             {

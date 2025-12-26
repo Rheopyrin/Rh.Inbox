@@ -53,7 +53,6 @@ internal sealed class InMemoryDeadLetterCleanupService : IInboxLifecycleHook
             }
             catch (OperationCanceledException)
             {
-                // Expected when token is cancelled before task completes
             }
         }
     }
@@ -70,7 +69,6 @@ internal sealed class InMemoryDeadLetterCleanupService : IInboxLifecycleHook
         }
         catch (OperationCanceledException) when (_lifecycle.StoppingToken.IsCancellationRequested)
         {
-            // Expected during shutdown
         }
         catch (Exception ex)
         {

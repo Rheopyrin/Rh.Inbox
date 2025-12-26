@@ -36,7 +36,6 @@ internal sealed class DefaultInboxProcessingStrategy : InboxProcessingStrategyBa
         var configuration = GetConfiguration();
         var serializer = GetSerializer();
 
-        // Process all messages in parallel - each message handles its own result immediately
         await ProcessInParallelAsync(messages, async (message, ct) =>
         {
             var messageType = configuration.MetadataRegistry.GetClrType(message.MessageType);
@@ -65,7 +64,6 @@ internal sealed class DefaultInboxProcessingStrategy : InboxProcessingStrategyBa
             return;
         }
 
-        // Create scope per handler execution (thread-safe for parallel processing)
         using var scope = ServiceProvider.CreateScope();
         var handler = scope.ServiceProvider.GetKeyedService<IInboxHandler<TMessage>>(Inbox.Name);
 
@@ -86,7 +84,6 @@ internal sealed class DefaultInboxProcessingStrategy : InboxProcessingStrategyBa
                 $"message {message.Id}",
                 token);
 
-            // Use Failed result on timeout, letting ProcessResultsBatchAsync handle max attempts logic
             var handlerResult = completed ? result : InboxHandleResult.Failed;
             var messageResult = new InboxMessageResult(message.Id, handlerResult);
             await context.ProcessResultsBatchAsync([messageResult], token);
