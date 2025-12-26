@@ -10,6 +10,6 @@
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <PackageIcon>icon.png</PackageIcon>
-        <VersionPrefix>0.8.0</VersionPrefix>
+        <VersionPrefix>0.8.2</VersionPrefix>
     </PropertyGroup>
 </Project>

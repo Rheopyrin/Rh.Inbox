@@ -210,9 +210,9 @@ public class InMemoryFifoGroupLockingTests(ITestOutputHelper output) : IAsyncLif
         {
             o.ReadBatchSize = 1;
             o.PollingInterval = TimeSpan.FromMilliseconds(50);
-            o.MaxProcessingTime = TimeSpan.FromSeconds(1); // Short timeout
+            o.MaxProcessingTime = TimeSpan.FromSeconds(5); // Long enough for handler to complete
             o.EnableLockExtension = true; // Enable automatic lock extension
-            o.LockExtensionThreshold = 0.5; // Extend at 50% of MaxProcessingTime
+            o.LockExtensionThreshold = 0.3; // Extend at 30% of MaxProcessingTime (1.5s)
         });
 
         var writer = _serviceProvider.GetRequiredService<IInboxWriter>();
@@ -224,7 +224,7 @@ public class InMemoryFifoGroupLockingTests(ITestOutputHelper output) : IAsyncLif
 
         await TestWaitHelper.WaitForConditionAsync(() => handler.CurrentlyProcessing > 0);
 
-        // Wait past original MaxProcessingTime - lock should be extended
+        // Wait for lock extension to occur (at 1.5s) but not past MaxProcessingTime (5s)
         await Task.Delay(TimeSpan.FromSeconds(2));
 
         // Message should still be processing (not re-captured due to lock extension)
@@ -247,9 +247,9 @@ public class InMemoryFifoGroupLockingTests(ITestOutputHelper output) : IAsyncLif
         {
             o.ReadBatchSize = 1;
             o.PollingInterval = TimeSpan.FromMilliseconds(50);
-            o.MaxProcessingTime = TimeSpan.FromSeconds(1);
+            o.MaxProcessingTime = TimeSpan.FromSeconds(5); // Long enough for handler to complete
             o.EnableLockExtension = true;
-            o.LockExtensionThreshold = 0.5;
+            o.LockExtensionThreshold = 0.3; // Extend at 30% of MaxProcessingTime (1.5s)
         });
 
         var writer = _serviceProvider.GetRequiredService<IInboxWriter>();

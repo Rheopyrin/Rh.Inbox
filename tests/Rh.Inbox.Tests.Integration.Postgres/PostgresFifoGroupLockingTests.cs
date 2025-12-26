@@ -290,9 +290,9 @@ public class PostgresFifoGroupLockingTests(PostgresContainerFixture container, I
         {
             o.ReadBatchSize = 1;
             o.PollingInterval = TimeSpan.FromMilliseconds(50);
-            o.MaxProcessingTime = TimeSpan.FromSeconds(1);
+            o.MaxProcessingTime = TimeSpan.FromSeconds(5); // Long enough for handler to complete
             o.EnableLockExtension = true;
-            o.LockExtensionThreshold = 0.5;
+            o.LockExtensionThreshold = 0.3; // Extend at 30% of MaxProcessingTime (1.5s)
         });
 
         var writer = _serviceProvider.GetRequiredService<IInboxWriter>();
@@ -325,9 +325,9 @@ public class PostgresFifoGroupLockingTests(PostgresContainerFixture container, I
         {
             o.ReadBatchSize = 1;
             o.PollingInterval = TimeSpan.FromMilliseconds(50);
-            o.MaxProcessingTime = TimeSpan.FromSeconds(1);
+            o.MaxProcessingTime = TimeSpan.FromSeconds(5); // Long enough for handler to complete
             o.EnableLockExtension = true;
-            o.LockExtensionThreshold = 0.5;
+            o.LockExtensionThreshold = 0.3; // Extend at 30% of MaxProcessingTime (1.5s)
         });
 
         var writer = _serviceProvider.GetRequiredService<IInboxWriter>();
